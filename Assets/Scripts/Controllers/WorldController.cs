@@ -24,9 +24,12 @@ public class WorldController : MonoBehaviour
     JobSpriteController jobSpriteController;
     InventorySpriteController inventorySpriteController;
     FurnitureSpriteController furnitureSpriteController;
+    QuestController questController;
 
     public BuildModeController buildModeController;
     public MouseController mouseController;
+    public KeyboardController keyboardController;
+    public CameraController cameraController;
     public SpawnInventoryController spawnInventoryController;
     public ModsManager modsManager;
 
@@ -56,11 +59,6 @@ public class WorldController : MonoBehaviour
 
     // Multiplier of Time.deltaTime.
     private float timeScale = 1f;
-
-    // An array of possible time multipliers.
-    private float[] possibleTimeScales = new float[6] { 0.1f, 0.5f, 1f, 2f, 4f, 8f };
-    // Current position in that array.
-    int currentTimeScalePosition = 2;
 
     public bool devMode = false;
 
@@ -92,7 +90,12 @@ public class WorldController : MonoBehaviour
         soundController = new SoundController(world);
     }
 
-    void Start() {
+    void Start()
+    {
+        //create gameobject so we can have access to a tranform thats position is Vector3.zero
+        GameObject goMat = new GameObject("VisualPath", typeof(VisualPath));
+        GameObject go;
+
         tileSpriteController = new TileSpriteController(world);
         tileSpriteController.Render();
         characterSpriteController = new CharacterSpriteController(world);
@@ -105,80 +108,35 @@ public class WorldController : MonoBehaviour
             spawnInventoryController = new SpawnInventoryController();
         }
         mouseController = new MouseController(buildModeController, furnitureSpriteController, circleCursorPrefab);
+        keyboardController = new KeyboardController(buildModeController, Instance);
+        questController = new QuestController();
+        cameraController = new CameraController();
 
         //Initialising controllers
         GameObject Controllers = GameObject.Find("Controllers");
         Instantiate(Resources.Load("UIController"), Controllers.transform);
+
+        GameObject Canvas = GameObject.Find("Canvas");
+        go = Instantiate(Resources.Load("UI/ContextMenu"),Canvas.transform.position, Canvas.transform.rotation, Canvas.transform) as GameObject;
+        go.name = "ContextMenu";
+
 
 
     }
 
     void Update()
     {
-        CheckTimeInput();
         mouseController.Update(IsModal);
+        keyboardController.Update(IsModal);
+        cameraController.Update(IsModal);
 
         if (IsPaused == false)
         {
             world.Update(Time.deltaTime * timeScale);
         }
 
+        questController.Update(Time.deltaTime);
         soundController.Update(Time.deltaTime);
-    }
-
-    void CheckTimeInput()
-    {
-        if (IsModal)
-        {
-            // A modal dialog box is open. Bail.
-            return;
-        }
-
-        // TODO: Move this into centralized keyboard manager where
-        // all of the buttons can be rebinded.
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            IsPaused = !IsPaused;
-            Debug.Log("Game " + (IsPaused ? "paused" : "resumed"));
-        }
-
-        if (Input.GetKeyDown(KeyCode.Plus) || Input.GetKeyDown(KeyCode.KeypadPlus))
-        {
-            if (currentTimeScalePosition == possibleTimeScales.Length - 1)
-            {
-                // We are on the top of possibleTimeScales so just bail out.
-                return;
-            }
-
-            currentTimeScalePosition++;
-            SetTimeScale(possibleTimeScales[currentTimeScalePosition]);
-        }
-        else if (Input.GetKeyDown(KeyCode.Minus) || Input.GetKeyDown(KeyCode.KeypadMinus))
-        {
-            if (currentTimeScalePosition == 0)
-            {
-                // We are on the bottom of possibleTimeScales so just bail out.
-                return;
-            }
-
-            currentTimeScalePosition--;
-            SetTimeScale(possibleTimeScales[currentTimeScalePosition]);
-        }
-        else if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.Keypad1))
-        {
-            SetTimeScale(1f);
-            currentTimeScalePosition = 2;
-        }
-        else if (Input.GetKeyDown(KeyCode.Alpha2) || Input.GetKeyDown(KeyCode.Keypad2))
-        {
-            SetTimeScale(2f);
-            currentTimeScalePosition = 3;
-        }
-        else if (Input.GetKeyDown(KeyCode.Alpha3) || Input.GetKeyDown(KeyCode.Keypad3))
-        {
-            SetTimeScale(4f);
-            currentTimeScalePosition = 4;
-        }
     }
 
     /// <summary>

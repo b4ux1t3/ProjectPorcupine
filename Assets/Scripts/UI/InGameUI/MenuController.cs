@@ -6,34 +6,34 @@
 // file LICENSE, which is part of this source code package, for details.
 // ====================================================
 #endregion
+
+using ProjectPorcupine.Localization;
 using UnityEngine;
 using UnityEngine.UI;
 using System.Collections;
 
 public class MenuController : MonoBehaviour
 {
+    DialogBoxManager dbm;
+
     // The left build menu.
     public GameObject constructorMenu;
 
     // The sub menus of the build menu (furniture, floor..... later - power, security, drones).
     public GameObject furnitureMenu;
     public GameObject floorMenu;
-
-    //The options and settings
-    public GameObject optionsMenu;
-    public GameObject settingsMenu;
-
-
+    
     public Button buttonConstructor;
     public Button buttonWorld;
     public Button buttonWork;
     public Button buttonOptions;
     public Button buttonSettings;
+    public Button buttonQuests;
 
     // Use this for initialization.
     void Start()
     {
-        DeactivateAll();
+        dbm = GameObject.Find("Dialog Boxes").GetComponent<DialogBoxManager>();
 
         // Add liseners here.
         buttonConstructor.onClick.AddListener(delegate
@@ -60,14 +60,31 @@ public class MenuController : MonoBehaviour
             {
                 OnButtonSettings();
             });
+
+        buttonQuests = CreateButton("menu_quests");
+        buttonQuests.onClick.AddListener(delegate
+            {
+                OnButtonQuests();
+            });
+
+        DeactivateAll();
+    }
+
+    private Button CreateButton(string text)
+    {
+        GameObject buttonQuestGameObject = (GameObject)Instantiate(Resources.Load("UI/MenuButton"), this.gameObject.transform);
+        buttonQuestGameObject.name = "Button - " + text;
+        Text buttonText = buttonQuestGameObject.transform.GetChild(0).GetComponent<Text>();
+        buttonText.text = text;
+        buttonText.GetComponent<TextLocalizer>().text = buttonText;
+        buttonText.GetComponent<TextLocalizer>().UpdateText();
+        return  buttonQuestGameObject.GetComponent<Button>();
     }
 
     // Deactivates All Menus.
     public void DeactivateAll()
     {
         constructorMenu.SetActive(false);
-        settingsMenu.SetActive(false);
-        optionsMenu.SetActive(false);
         DeactivateSubs();
 
     }
@@ -114,33 +131,37 @@ public class MenuController : MonoBehaviour
 
     public void OnButtonWorld()
     {
-        DeactivateAll();
+        if (!WorldController.Instance.IsModal)
+        {
+            DeactivateAll();
+        }
 
+    }
+
+    public void OnButtonQuests()
+    {
+        if (!WorldController.Instance.IsModal)
+        {
+            DeactivateAll();
+            dbm.dialogBoxQuests.ShowDialog();
+        }
     }
 
     public void OnButtonOptions()
     {
-        if (optionsMenu.activeSelf)
+        if (!WorldController.Instance.IsModal)
         {
             DeactivateAll();
-        }
-        else
-        {
-            DeactivateAll();
-            optionsMenu.SetActive(true);
+            dbm.dialogBoxOptions.ShowDialog();
         }
     }
 
     public void OnButtonSettings()
     {
-        if (settingsMenu.activeSelf)
+        if (!WorldController.Instance.IsModal)
         {
             DeactivateAll();
-        }
-        else
-        {
-            DeactivateAll();
-            settingsMenu.SetActive(true);
+            dbm.dialogBoxSettings.ShowDialog();
         }
     }
 }

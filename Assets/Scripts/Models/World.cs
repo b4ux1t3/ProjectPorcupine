@@ -8,13 +8,14 @@
 
 
 #endregion
+
+using System.Linq;
 using UnityEngine;
 using System.Collections.Generic;
 using System;
 using System.Xml;
 using System.Xml.Schema;
 using System.Xml.Serialization;
-using System.Text.RegularExpressions;
 using System.IO;
 using MoonSharp.Interpreter;
 
@@ -23,7 +24,7 @@ public class World : IXmlSerializable
 {
     // TODO: Should this be also saved with the world data?
     // If so - beginner task!
-    public readonly string currentGameVersion = "Someone_will_come_up_with_a_proper_naming_scheme_later";
+    public readonly string gameVersion = "Someone_will_come_up_with_a_proper_naming_scheme_later";
 
     // A two-dimensional array to hold our tile data.
     Tile[,] tiles;
@@ -32,6 +33,7 @@ public class World : IXmlSerializable
     public List<Room> rooms;
     public InventoryManager inventoryManager;
     public PowerSystem powerSystem;
+    public Material skybox;
     // Store all temperature information
     public Temperature temperature;
 
@@ -43,6 +45,7 @@ public class World : IXmlSerializable
     public Dictionary<string, Need> needPrototypes;
     public Dictionary<string, InventoryCommon> inventoryPrototypes;
     public Dictionary<string, TraderPrototype> traderPrototypes;
+    public List<Quest> Quests;
 
     // The tile width of the world.
     public int Width { get; protected set; }
@@ -88,8 +91,6 @@ public class World : IXmlSerializable
 
     }
 
-
-
     public Room GetOutsideRoom()
     {
         return rooms[0];
@@ -110,16 +111,23 @@ public class World : IXmlSerializable
     public void AddRoom(Room r)
     {
         rooms.Add(r);
+        Debug.ULogChannel("Rooms","creating room:" + r.ID);
+    }
+
+    public int CountFurnitureType(string objectType)
+    {
+        int count = furnitures.Count(f => f.objectType == objectType);
+        return count;
     }
 
     public void DeleteRoom(Room r)
     {
-        if (r == GetOutsideRoom())
+        if (r.IsOutsideRoom())
         {
             Debug.LogError("Tried to delete the outside room.");
             return;
         }
-
+        Debug.ULogChannel("Rooms","Deleting room:" + r.ID);
         // Remove this room from our rooms list.
         rooms.Remove(r);
 
@@ -159,17 +167,64 @@ public class World : IXmlSerializable
                 tiles[x, y].Room = GetOutsideRoom(); // Rooms 0 is always going to be outside, and that is our default room
             }
         }
-
+        new NeedActions ();
         CreateFurniturePrototypes();
         CreateNeedPrototypes ();
         CreateInventoryPrototypes();
         CreateTraderPrototypes();
+        CreateQuests();
 
         characters = new List<Character>();
         furnitures = new List<Furniture>();
         inventoryManager = new InventoryManager();
         powerSystem = new PowerSystem();
         temperature = new Temperature(Width, Height);
+        LoadSkybox();
+    }
+
+    private void LoadSkybox(string name = null)
+    {
+        DirectoryInfo dirInfo = new DirectoryInfo(Path.Combine(Application.dataPath, "Resources/Skyboxes"));
+        if (!dirInfo.Exists)
+            dirInfo.Create();
+
+        FileInfo[] files = dirInfo.GetFiles("*.mat", SearchOption.AllDirectories);
+
+        if (files.Length > 0)
+        {
+            string resourcePath = string.Empty;
+            FileInfo file = null;
+            if (!string.IsNullOrEmpty(name))
+            {
+                foreach (FileInfo fileInfo in files)
+                {
+                    if (name.Equals(fileInfo.Name.Remove(fileInfo.Name.LastIndexOf("."))))
+                    {
+                        file = fileInfo;
+                        break;
+                    }
+                }
+            }
+
+            // Maybe we passed in a name that doesn't exist? Pick a random skybox.
+            if (file == null)
+            {
+                // Get random file
+                file = files[(int)(UnityEngine.Random.value * files.Length)];
+            }
+
+            resourcePath = Path.Combine(file.DirectoryName.Substring(file.DirectoryName.IndexOf("Skyboxes")), file.Name);
+
+            if (resourcePath.Contains("."))
+                resourcePath = resourcePath.Remove(resourcePath.LastIndexOf("."));
+
+            skybox = Resources.Load<Material>(resourcePath);
+            RenderSettings.skybox = skybox;
+        }
+        else
+        {
+            Debug.LogWarning("No skyboxes detected! Falling back to black.");
+        }
     }
 
     public void Update(float deltaTime)
@@ -196,11 +251,9 @@ public class World : IXmlSerializable
         // Adds a random name to the Character
         string filePath = System.IO.Path.Combine(Application.streamingAssetsPath, "Data");
         filePath = System.IO.Path.Combine(filePath, "CharacterNames.txt");
-        string names = System.IO.File.ReadAllText(filePath);
 
-        string[] lines = Regex.Split( names, "\r\n" );
-        c.name = lines[UnityEngine.Random.Range(0, lines.Length-1)];
-
+        string[] names = File.ReadAllLines(filePath);
+        c.name = names[UnityEngine.Random.Range(0, names.Length-1)];
         characters.Add(c);
 
         if (cbCharacterCreated != null)
@@ -227,20 +280,11 @@ public class World : IXmlSerializable
         furnitureJobPrototypes[f.objectType] = j;
     }
 
-    void LoadFurnitureLua(string filePath)
-    {
-        string myLuaCode = System.IO.File.ReadAllText(filePath);
-
-        // Instantiate the singleton
-
-        FurnitureActions.addScript(myLuaCode);
-    }
-
     void CreateFurniturePrototypes()
     {
         string luaFilePath = System.IO.Path.Combine(Application.streamingAssetsPath, "LUA");
         luaFilePath = System.IO.Path.Combine(luaFilePath, "Furniture.lua");
-        LoadFurnitureLua(luaFilePath);
+        LuaUtilities.LoadScriptFromFile(luaFilePath);
 
 
         furniturePrototypes = new Dictionary<string, Furniture>();
@@ -262,7 +306,7 @@ public class World : IXmlSerializable
             string furnitureLuaModFile = System.IO.Path.Combine(mod.FullName, "Furniture.lua");
             if (File.Exists(furnitureLuaModFile))
             {
-                LoadFurnitureLua(furnitureLuaModFile);
+                LuaUtilities.LoadScriptFromFile(furnitureLuaModFile);
             }
 
             string furnitureXmlModFile = System.IO.Path.Combine(mod.FullName, "Furniture.xml");
@@ -314,22 +358,54 @@ public class World : IXmlSerializable
         }
     }
 
+    void LoadNeedLua(string filePath)
+    {
+        string myLuaCode = System.IO.File.ReadAllText(filePath);
 
+        // Instantiate the singleton
+
+        NeedActions.AddScript(myLuaCode);
+    }
 
     void CreateNeedPrototypes()
     {
-        
         needPrototypes = new Dictionary<string, Need>();
+        string luaFilePath = System.IO.Path.Combine(Application.streamingAssetsPath, "LUA");
+        luaFilePath = System.IO.Path.Combine(luaFilePath, "Need.lua");
+        LoadNeedLua(luaFilePath);
+        string filePath = System.IO.Path.Combine(Application.streamingAssetsPath, "Data");
+        filePath = System.IO.Path.Combine(filePath, "Need.xml");
+        string needXmlText = System.IO.File.ReadAllText(filePath);
+        LoadNeedPrototypesFromFile (needXmlText);
+        DirectoryInfo[] mods = WorldController.Instance.modsManager.GetMods();
+        foreach (DirectoryInfo mod in mods)
+        {
+            string needLuaModFile = System.IO.Path.Combine(mod.FullName, "Need.lua");
+            if (File.Exists(needLuaModFile))
+            {
+                LoadNeedLua(needLuaModFile);
+            }
+
+            string needXmlModFile = System.IO.Path.Combine(mod.FullName, "Need.xml");
+            if (File.Exists(needXmlModFile))
+            {
+                string needXmlModText = System.IO.File.ReadAllText(needXmlModFile);
+                LoadNeedPrototypesFromFile(needXmlModText);
+            }
+        }
+    }
+
+    void LoadNeedPrototypesFromFile(string needXmlText)
+    {
+        
+        
 
         // READ FURNITURE PROTOTYPE XML FILE HERE
         // TODO:  Probably we should be getting past a StreamIO handle or the raw
         // text here, rather than opening the file ourselves.
 
-        string filePath = System.IO.Path.Combine(Application.streamingAssetsPath, "Data");
-        filePath = System.IO.Path.Combine(filePath, "Need.xml");
-        string furnitureXmlText = System.IO.File.ReadAllText(filePath);
 
-        XmlTextReader reader = new XmlTextReader(new StringReader(furnitureXmlText));
+        XmlTextReader reader = new XmlTextReader(new StringReader(needXmlText));
 
         int needCount = 0;
         if (reader.ReadToDescendant("Needs"))
@@ -360,7 +436,7 @@ public class World : IXmlSerializable
             {
                 Debug.LogError("The need prototype definition file doesn't have any 'Need' elements.");
             }
-			Debug.Log("Need prototypes read: " + needCount.ToString());
+            Debug.Log("Need prototypes read: " + needCount.ToString());
         }
     }
     void CreateInventoryPrototypes()
@@ -398,7 +474,7 @@ public class World : IXmlSerializable
         DirectoryInfo[] mods = WorldController.Instance.modsManager.GetMods();
         foreach (DirectoryInfo mod in mods)
         {
-            string traderXmlModFile = System.IO.Path.Combine(mod.FullName, "Traders.xml");
+            string traderXmlModFile = System.IO.Path.Combine(mod.FullName, "Trader.xml");
             if (File.Exists(traderXmlModFile))
             {
                 string traderXmlModText = System.IO.File.ReadAllText(traderXmlModFile);
@@ -411,14 +487,14 @@ public class World : IXmlSerializable
     {
         XmlTextReader reader = new XmlTextReader(new StringReader(traderXmlText));
 
-        int inventoryCount = 0;
+        int traderCount = 0;
         if (reader.ReadToDescendant("Traders"))
         {
             if (reader.ReadToDescendant("Trader"))
             {
                 do
                 {
-                    inventoryCount++;
+                    traderCount++;
 
                     TraderPrototype trader = new TraderPrototype();
                     try
@@ -443,6 +519,66 @@ public class World : IXmlSerializable
         else
         {
             Debug.LogError("Did not find a 'Traders' element in the prototype definition file.");
+        }
+    }
+
+    void CreateQuests()
+    {
+        Quests = new List<Quest>();
+
+        string dataPath = System.IO.Path.Combine(Application.streamingAssetsPath, "Data");
+        string filePath = System.IO.Path.Combine(dataPath, "Quest.xml");
+        string questrXmlText = System.IO.File.ReadAllText(filePath);
+        LoadQuestsFromFile(questrXmlText);
+        
+        DirectoryInfo[] mods = WorldController.Instance.modsManager.GetMods();
+        foreach (DirectoryInfo mod in mods)
+        {
+            string traderXmlModFile = System.IO.Path.Combine(mod.FullName, "Quest.xml");
+            if (File.Exists(traderXmlModFile))
+            {
+                string questXmlModText = System.IO.File.ReadAllText(traderXmlModFile);
+                LoadQuestsFromFile(questXmlModText);
+            }
+        }
+    }
+
+    void LoadQuestsFromFile(string questXmlText)
+    {
+        XmlTextReader reader = new XmlTextReader(new StringReader(questXmlText));
+
+        int questCount = 0;
+        if (reader.ReadToDescendant("Quests"))
+        {
+            if (reader.ReadToDescendant("Quest"))
+            {
+                do
+                {
+                    questCount++;
+
+                    Quest quest = new Quest();
+                    try
+                    {
+                        quest.ReadXmlPrototype(reader);
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogError("Error reading quest for: " + quest.Name + Environment.NewLine + "Exception: " + e.Message + Environment.NewLine + "StackTrace: " + e.StackTrace);
+                    }
+
+
+                    Quests.Add(quest);
+
+                } while (reader.ReadToNextSibling("Quest"));
+            }
+            else
+            {
+                Debug.LogError("The quest prototype definition file doesn't have any 'Quest' elements.");
+            }
+        }
+        else
+        {
+            Debug.LogError("Did not find a 'Quests' element in the prototype definition file.");
         }
     }
 
@@ -563,6 +699,58 @@ public class World : IXmlSerializable
         return tiles[x, y];
     }
 
+    public Tile GetCenterTile()
+    {
+        return GetTileAt(Width/2, Height/2);
+    }
+
+    public Tile GetFirstCenterTileWithNoInventory(int maxOffset)
+    {
+        for (int offset = 0; offset <= maxOffset; offset++)
+        {
+            int offsetX = 0;
+            int offsetY = 0;
+            Tile tile;
+
+            // searching top & bottom line of the square
+            for (offsetX = -offset; offsetX <= offset; offsetX++)
+            {
+                offsetY = offset;
+                tile = GetTileAt(Width / 2 + offsetX, Height / 2 + offsetY);
+                if (tile.Inventory == null)
+                {
+                    return tile;
+                }
+
+                offsetY = -offset;
+                tile = GetTileAt(Width / 2 + offsetX, Height / 2 + offsetY);
+                if (tile.Inventory == null)
+                {
+                    return tile;
+                }
+            }
+            
+            // searching left & rigth line of the square
+            for (offsetY = -offset; offsetY <= offset; offsetY++)
+            {
+                offsetX = offset;
+                tile = GetTileAt(Width / 2 + offsetX, Height / 2 + offsetY);
+                if (tile.Inventory == null)
+                {
+                    return tile;
+                }
+
+                offsetX = -offset;
+                tile = GetTileAt(Width / 2 + offsetX, Height / 2 + offsetY);
+                if (tile.Inventory == null)
+                {
+                    return tile;
+                }
+            }
+        }
+
+        return null;
+    }
 
     public Furniture PlaceFurniture(string objectType, Tile t, bool doRoomFloodFill = true)
     {
@@ -725,6 +913,8 @@ public class World : IXmlSerializable
 
         }
         writer.WriteEndElement();
+
+        writer.WriteElementString("Skybox", skybox.name);
     }
 
     public void ReadXml(XmlReader reader)
@@ -754,6 +944,9 @@ public class World : IXmlSerializable
                     break;
                 case "Characters":
                     ReadXml_Characters(reader);
+                    break;
+                case "Skybox":
+                    LoadSkybox(reader.ReadElementString("Skybox"));
                     break;
             }
         }
