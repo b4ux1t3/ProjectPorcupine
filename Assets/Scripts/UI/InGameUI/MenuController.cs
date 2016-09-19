@@ -15,35 +15,21 @@ public class MenuController : MonoBehaviour
 {
     public static MenuController Instance;
 
-    // The sub menus of the build menu (furniture, floor..... later - power, security, drones).
-    public GameObject furnitureMenu;
-    public GameObject floorMenu;
-
     public Button buttonConstructor;
     public Button buttonWorld;
     public Button buttonWork;
     public Button buttonOptions;
-    public Button buttonSettings;
     public Button buttonQuests;
 
-    private DialogBoxManager dbm;
+    private DialogBoxManager dialogBoxManager;
 
-    // The left build menu.
-    private GameObject constructorMenu;
+    private MenuLeft menuLeft;
 
     // Deactivates All Menus.
     public void DeactivateAll()
     {
-        constructorMenu.SetActive(false);
-        DeactivateSubs();
-    }
-
-    // Deactivates any sub menu of the construction options.
-    public void DeactivateSubs()
-    {
+        menuLeft.CloseMenu();
         WorldController.Instance.mouseController.ClearMouseMode(true);
-        furnitureMenu.SetActive(false);
-        floorMenu.SetActive(false);
     }
 
     // Toggles whether menu is active.
@@ -54,14 +40,13 @@ public class MenuController : MonoBehaviour
 
     public void OnButtonConstruction()
     {
-        if (constructorMenu.activeSelf)
+        if (menuLeft.CurrentlyOpen != null && menuLeft.CurrentlyOpen.gameObject.name == "ConstructionMenu")
         {
-            DeactivateAll();
+            menuLeft.CloseMenu();
         }
         else
         {
-            DeactivateAll();
-            constructorMenu.SetActive(true);
+            menuLeft.OpenMenu("ConstructionMenu");
         }
     }
 
@@ -70,7 +55,7 @@ public class MenuController : MonoBehaviour
         if (!WorldController.Instance.IsModal)
         {
             DeactivateAll();
-            dbm.dialogBoxJobList.ShowDialog();
+            dialogBoxManager.dialogBoxJobList.ShowDialog();
         }
     }
 
@@ -87,7 +72,7 @@ public class MenuController : MonoBehaviour
         if (!WorldController.Instance.IsModal)
         {
             DeactivateAll();
-            dbm.dialogBoxQuests.ShowDialog();
+            dialogBoxManager.dialogBoxQuests.ShowDialog();
         }
     }
 
@@ -96,27 +81,20 @@ public class MenuController : MonoBehaviour
         if (!WorldController.Instance.IsModal)
         {
             DeactivateAll();
-            dbm.dialogBoxOptions.ShowDialog();
-        }
-    }
+            if (dialogBoxManager.dialogBoxSettings.isActiveAndEnabled)
+            {
+                dialogBoxManager.dialogBoxSettings.CloseDialog();
+            }
 
-    public void OnButtonSettings()
-    {
-        if (!WorldController.Instance.IsModal)
-        {
-            DeactivateAll();
-            dbm.dialogBoxSettings.ShowDialog();
+            dialogBoxManager.dialogBoxOptions.ShowDialog();
         }
     }
 
     // Use this for initialization.
     private void Start()
     {
-        dbm = GameObject.Find("Dialog Boxes").GetComponent<DialogBoxManager>();
-
-        furnitureMenu = GameObject.Find("MenuFurniture");
-        floorMenu = GameObject.Find("MenuFloor");
-        constructorMenu = GameObject.Find("MenuConstruction");
+        dialogBoxManager = GameObject.Find("Dialog Boxes").GetComponent<DialogBoxManager>();
+        menuLeft = GameObject.Find("MenuLeft").GetComponent<MenuLeft>();
 
         // Add listeners here.
         buttonConstructor.onClick.AddListener(delegate
@@ -137,11 +115,6 @@ public class MenuController : MonoBehaviour
         buttonOptions.onClick.AddListener(delegate
         {
             OnButtonOptions();
-        });
-
-        buttonSettings.onClick.AddListener(delegate
-        {
-            OnButtonSettings();
         });
 
         buttonQuests = CreateButton("menu_quests");
