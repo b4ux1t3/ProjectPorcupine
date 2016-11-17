@@ -40,14 +40,14 @@ public class DialogBoxTrade : DialogBox
 
     public void DoTradingTestWithMockTraders()
     {
+        Currency currency = PrototypeManager.Currency.Get("Quill Corp Bucks");
+
+        Currency playerCurrency = currency.Clone();
+        playerCurrency.Balance = 1000f;
+
         Trader mockPlayer = new Trader
         {
-            Currency = new Currency
-            {
-                Balance = 1000f,
-                Name = "Test Currency",
-                ShortName = "TC"
-            },
+            Currency = playerCurrency,
             Name = "Player",
             SaleMarginMultiplier = 1f,
             Stock = new List<Inventory>
@@ -57,14 +57,12 @@ public class DialogBoxTrade : DialogBox
             }
         };
 
+        Currency traderCurrency = currency.Clone();
+        traderCurrency.Balance = 1000f;
+
         Trader mockTrader = new Trader
         {
-            Currency = new Currency
-            {
-                Balance = 1000f,
-                Name = "Test Currency",
-                ShortName = "TC"
-            },
+            Currency = traderCurrency,
             Name = "Trader",
             SaleMarginMultiplier = 1.23f,
             Stock = new List<Inventory>
@@ -118,7 +116,7 @@ public class DialogBoxTrade : DialogBox
 
         foreach (TradeItem tradeItem in trade.TradeItems)
         {
-            GameObject go = (GameObject)Instantiate(Resources.Load("Prefab/TradeItemPrefab"), TradeItemListPanel);
+            GameObject go = (GameObject)Instantiate(Resources.Load("UI/Components/TradeItemPrefab"), TradeItemListPanel);
 
             DialogBoxTradeItem tradeItemBehaviour = go.GetComponent<DialogBoxTradeItem>();
             tradeItemBehaviour.OnTradeAmountChangedEvent += item => BuildInterfaceHeader();

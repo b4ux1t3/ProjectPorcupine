@@ -7,9 +7,6 @@
 // ====================================================
 #endregion
 
-using System.Collections;
-using System.IO;
-using System.Xml;
 using Scheduler;
 using UnityEngine;
 using UnityEngine.UI;
@@ -48,6 +45,11 @@ public class HeadlineController : MonoBehaviour
 
     private void UpdateHeadline(string newHeadline)
     {
+        if (canvasGroup == null)
+        {
+            return;
+        }
+
         canvasGroup.alpha = 1;
         canvasGroup.interactable = true;
         canvasGroup.blocksRaycasts = true;

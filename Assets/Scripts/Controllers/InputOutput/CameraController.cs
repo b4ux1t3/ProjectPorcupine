@@ -6,6 +6,7 @@
 // file LICENSE, which is part of this source code package, for details.
 // ====================================================
 #endregion
+using System;
 using UnityEngine;
 
 public class CameraController
@@ -24,6 +25,7 @@ public class CameraController
     private float frameMoveVertical = 0;
 
     private Vector3 positionTarget;
+    private Vector3 prevPositionTarget;
 
     private CameraData cameraData;
 
@@ -32,7 +34,7 @@ public class CameraController
         // Main camera handles UI only
         Camera.main.farClipPlane = 9;
 
-        cameraData = WorldController.Instance.World.cameraData;
+        cameraData = World.Current.CameraData;
 
         KeyboardManager keyboardManager = KeyboardManager.Instance;
         keyboardManager.RegisterInputAction("MoveCameraEast", KeyboardMappedInputType.Key, () => { frameMoveHorizontal++; });
@@ -59,9 +61,10 @@ public class CameraController
         Camera.main.orthographicSize = zoomTarget;
 
         positionTarget = Camera.main.transform.position;
-
         TimeManager.Instance.EveryFrameNotModal += (time) => Update();
     }
+
+    public event Action<Bounds> Moved;
 
     public int CurrentLayer
     {
@@ -114,6 +117,15 @@ public class CameraController
             Camera.main.transform.Translate(pushedAmount);
             positionTarget = Camera.main.transform.position;
         }
+
+        if (prevPositionTarget != positionTarget && Moved != null)
+        {
+            Moved(GetCameraBounds());
+        }
+
+        prevPositionTarget = positionTarget;
+
+        WorldController.Instance.soundController.SetListenerPosition(Camera.main.transform.position.x, Camera.main.transform.position.y, (float)CurrentLayer);
     }
 
     public void ChangeZoom(float amount)
@@ -121,7 +133,7 @@ public class CameraController
         zoomTarget = Camera.main.orthographicSize - (Settings.GetSetting("ZoomSensitivity", 3) * (Camera.main.orthographicSize * amount));
     }
 
-    public void ChangeLayer(int newLayer) 
+    public void ChangeLayer(int newLayer)
     {
         if (layerCameras != null && newLayer >= 0 && newLayer < layerCameras.Length)
         {
@@ -165,11 +177,13 @@ public class CameraController
 
             cameraData.position = Camera.main.transform.position;
             cameraData.zoomLevel = zoomTarget;
+            cameraData.zLevel = currentLayer;
 
             for (int i = 0; i < cameraData.presets.Length; i++)
             {
                 cameraData.presets[i].position = Camera.main.transform.position;
                 cameraData.presets[i].zoomLevel = Camera.main.orthographicSize;
+                cameraData.presets[i].zLevel = currentLayer;
             }
         }
         else
@@ -179,7 +193,23 @@ public class CameraController
 
             zoomTarget = cameraData.zoomLevel;
             Camera.main.orthographicSize = zoomTarget;
+
+            ChangeLayer(cameraData.zLevel);
         }
+    }
+
+    /// <summary>
+    /// Get the bounds of the main camera.
+    /// </summary>    
+    private Bounds GetCameraBounds()
+    {
+        float x = Camera.main.transform.position.x;
+        float y = Camera.main.transform.position.y;
+        float size = Camera.main.orthographicSize * 2;
+        float width = size * (float)Screen.width / Screen.height;
+        float height = size;
+
+        return new Bounds(new Vector3(x, y, 0), new Vector3(width, height, 0));
     }
 
     private void ApplyPreset(Preset preset)
@@ -208,7 +238,7 @@ public class CameraController
 
     private void CreateLayerCameras()
     {
-        if (WorldController.Instance.World == null) 
+        if (WorldController.Instance.World == null)
         {
             return;
         }

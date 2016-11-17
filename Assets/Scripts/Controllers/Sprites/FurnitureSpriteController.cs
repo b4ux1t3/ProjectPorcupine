@@ -7,91 +7,104 @@
 // ====================================================
 #endregion
 using System.Collections.Generic;
+using ProjectPorcupine.Buildable.Components;
 using UnityEngine;
 
 public class FurnitureSpriteController : BaseSpriteController<Furniture>
 {
-    private Dictionary<Furniture, GameObject> powerStatusGameObjectMap;
+    private Dictionary<Furniture, FurnitureChildObjects> childObjectMap;
 
     // Use this for initialization
     public FurnitureSpriteController(World world) : base(world, "Furniture")
     {
         // Instantiate our dictionary that tracks which GameObject is rendering which Tile data.
-        powerStatusGameObjectMap = new Dictionary<Furniture, GameObject>();
+        childObjectMap = new Dictionary<Furniture, FurnitureChildObjects>();
 
         // Register our callback so that our GameObject gets updated whenever
         // the tile's type changes.
-        world.OnFurnitureCreated += OnCreated;
+        world.FurnitureManager.Created += OnCreated;
 
         // Go through any EXISTING furniture (i.e. from a save that was loaded OnEnable) and call the OnCreated event manually.
-        foreach (Furniture furn in world.furnitures)
+        foreach (Furniture furniture in world.FurnitureManager)
         {
-            OnCreated(furn);
+            OnCreated(furniture);
         }
     }
 
     public override void RemoveAll()
     {
-        world.OnFurnitureCreated -= OnCreated;
+        world.FurnitureManager.Created -= OnCreated;
 
-        foreach (Furniture furn in world.furnitures)
+        foreach (Furniture furniture in world.FurnitureManager)
         {
-            furn.Changed -= OnChanged;
-            furn.Removed -= OnRemoved;
-            furn.IsOperatingChanged -= OnIsOperatingChanged;
+            furniture.Changed -= OnChanged;
+            furniture.Removed -= OnRemoved;
+            furniture.IsOperatingChanged -= OnIsOperatingChanged;
         }
 
-        foreach (Furniture furn in powerStatusGameObjectMap.Keys)
+        foreach (FurnitureChildObjects childObjects in childObjectMap.Values)
         {
-            GameObject.Destroy(powerStatusGameObjectMap[furn]);
+            childObjects.Destroy();
         }
-            
-        powerStatusGameObjectMap.Clear();
+
+        childObjectMap.Clear();
         base.RemoveAll();
     }
 
     public Sprite GetSpriteForFurniture(string type)
     {
         Furniture proto = PrototypeManager.Furniture.Get(type);
-        string spriteName = proto.GetSpriteName();
-        Sprite s = SpriteManager.GetSprite("Furniture", spriteName + (proto.LinksToNeighbour != string.Empty && !proto.OnlyUseDefaultSpriteName ? "_" : string.Empty));
+        Sprite s = SpriteManager.GetSprite("Furniture", proto.GetDefaultSpriteName());
 
         return s;
     }
 
-    public Sprite GetSpriteForFurniture(Furniture furn)
+    public Sprite GetSpriteForFurniture(Furniture furniture)
     {
-        string spriteName = furn.GetSpriteName();
+        bool explicitSpriteUsed;
+        string spriteName = furniture.GetSpriteName(out explicitSpriteUsed);
 
-        if (furn.LinksToNeighbour == string.Empty || furn.OnlyUseDefaultSpriteName)
+        if (string.IsNullOrEmpty(furniture.LinksToNeighbour) || explicitSpriteUsed)
         {
             return SpriteManager.GetSprite("Furniture", spriteName);
         }
-
+        
         // Otherwise, the sprite name is more complicated.
         spriteName += "_";
 
         // Check for neighbours North, East, South, West, Northeast, Southeast, Southwest, Northwest
-        int x = furn.Tile.X;
-        int y = furn.Tile.Y;
+        int x = furniture.Tile.X;
+        int y = furniture.Tile.Y;
         string suffix = string.Empty;
 
-        suffix += GetSuffixForNeighbour(furn, x, y + 1, furn.Tile.Z, "N");
-        suffix += GetSuffixForNeighbour(furn, x + 1, y, furn.Tile.Z, "E");
-        suffix += GetSuffixForNeighbour(furn, x, y - 1, furn.Tile.Z, "S");
-        suffix += GetSuffixForNeighbour(furn, x - 1, y, furn.Tile.Z, "W");
+        suffix += GetSuffixForNeighbour(furniture, x, y + 1, furniture.Tile.Z, "N");
+        suffix += GetSuffixForNeighbour(furniture, x + 1, y, furniture.Tile.Z, "E");
+        suffix += GetSuffixForNeighbour(furniture, x, y - 1, furniture.Tile.Z, "S");
+        suffix += GetSuffixForNeighbour(furniture, x - 1, y, furniture.Tile.Z, "W");
 
         // Now we check if we have the neighbours in the cardinal directions next to the respective diagonals
         // because pure diagonal checking would leave us with diagonal walls and stockpiles, which make no sense.
-        suffix += GetSuffixForDiagonalNeighbour(suffix, "N", "E", furn, x + 1, y + 1, furn.Tile.Z);
-        suffix += GetSuffixForDiagonalNeighbour(suffix, "S", "E", furn, x + 1, y - 1, furn.Tile.Z);
-        suffix += GetSuffixForDiagonalNeighbour(suffix, "S", "W", furn, x - 1, y - 1, furn.Tile.Z);
-        suffix += GetSuffixForDiagonalNeighbour(suffix, "N", "W", furn, x - 1, y + 1, furn.Tile.Z);
+        suffix += GetSuffixForDiagonalNeighbour(suffix, "N", "E", furniture, x + 1, y + 1, furniture.Tile.Z);
+        suffix += GetSuffixForDiagonalNeighbour(suffix, "S", "E", furniture, x + 1, y - 1, furniture.Tile.Z);
+        suffix += GetSuffixForDiagonalNeighbour(suffix, "S", "W", furniture, x - 1, y - 1, furniture.Tile.Z);
+        suffix += GetSuffixForDiagonalNeighbour(suffix, "N", "W", furniture, x - 1, y + 1, furniture.Tile.Z);
 
         // For example, if this object has all eight neighbours of
         // the same type, then the string will look like:
         //       Wall_NESWneseswnw
         return SpriteManager.GetSprite("Furniture", spriteName + suffix);
+    }
+
+    public Sprite GetOverlaySpriteForFurniture(Furniture furniture)
+    {
+        Sprite overlaySprite = null;
+        string spriteName = furniture.GetOverlaySpriteName();
+        if (!string.IsNullOrEmpty(spriteName))
+        {
+            overlaySprite = SpriteManager.GetSprite("Furniture", spriteName);
+        }
+
+        return overlaySprite;
     }
 
     protected override void OnCreated(Furniture furniture)
@@ -121,35 +134,40 @@ public class FurnitureSpriteController : BaseSpriteController<Furniture>
         sr.sprite = GetSpriteForFurniture(furniture);
         sr.sortingLayerName = "Furniture";
         sr.color = furniture.Tint;
-
+        
         furn_go.name = furniture.Type + "_" + furniture.Tile.X + "_" + furniture.Tile.Y;
-        furn_go.transform.position = furniture.Tile.Vector3 + ImageUtils.SpritePivotOffset(sr.sprite);
+        furn_go.transform.position = furniture.Tile.Vector3 + ImageUtils.SpritePivotOffset(sr.sprite, furniture.Rotation);
+        furn_go.transform.Rotate(0, 0, furniture.Rotation);
         furn_go.transform.SetParent(objectParent.transform, true);
 
         sr.sortingOrder = Mathf.RoundToInt(furn_go.transform.position.y * -1);
 
-        if (furniture.PowerConnection != null && furniture.PowerConnection.IsPowerConsumer)
+        FurnitureChildObjects childObjects = new FurnitureChildObjects();
+        childObjectMap.Add(furniture, childObjects);
+
+        childObjects.Overlay = new GameObject();
+        childObjects.Overlay.transform.parent = furn_go.transform;
+        childObjects.Overlay.transform.position = furn_go.transform.position;
+        SpriteRenderer spriteRendererOverlay = childObjects.Overlay.AddComponent<SpriteRenderer>();
+        Sprite overlaySprite = GetOverlaySpriteForFurniture(furniture);
+        if (overlaySprite != null)
         {
-            GameObject powerGameObject = new GameObject();
-            powerStatusGameObjectMap.Add(furniture, powerGameObject);
-            powerGameObject.transform.parent = furn_go.transform;
-            powerGameObject.transform.position = furn_go.transform.position;
-
-            SpriteRenderer powerSpriteRenderer = powerGameObject.AddComponent<SpriteRenderer>();
-            powerSpriteRenderer.sprite = GetPowerStatusSprite();
-            powerSpriteRenderer.sortingLayerName = "Power";
-            powerSpriteRenderer.color = Color.red;
-
-            if (furniture.IsOperating)
-            {
-                powerGameObject.SetActive(false);
-            }
-            else
-            {
-                powerGameObject.SetActive(true);
-            }
+            spriteRendererOverlay.sprite = overlaySprite;
+            spriteRendererOverlay.sortingLayerName = "Furniture";
+            spriteRendererOverlay.sortingOrder = Mathf.RoundToInt(furn_go.transform.position.y * -1) + 1;
         }
+        
+        childObjects.PowerStatusIndicator = new GameObject();
+        childObjects.PowerStatusIndicator.transform.parent = furn_go.transform;
+        childObjects.PowerStatusIndicator.transform.position = furn_go.transform.position;
 
+        SpriteRenderer powerSpriteRenderer = childObjects.PowerStatusIndicator.AddComponent<SpriteRenderer>();
+        powerSpriteRenderer.sprite = GetPowerStatusSprite();
+        powerSpriteRenderer.sortingLayerName = "Power";
+        powerSpriteRenderer.color = Color.red;
+
+        UpdateIconObjectsVisibility(furniture, childObjects.PowerStatusIndicator);
+        
         if (furniture.Animation != null)
         { 
             furniture.Animation.Renderer = sr;
@@ -203,6 +221,12 @@ public class FurnitureSpriteController : BaseSpriteController<Furniture>
         
         furn_go.GetComponent<SpriteRenderer>().sprite = GetSpriteForFurniture(furn);
         furn_go.GetComponent<SpriteRenderer>().color = furn.Tint;
+
+        Sprite overlaySprite = GetOverlaySpriteForFurniture(furn);
+        if (overlaySprite != null)
+        {
+            childObjectMap[furn].Overlay.GetComponent<SpriteRenderer>().sprite = overlaySprite;
+        }
     }
         
     protected override void OnRemoved(Furniture furn)
@@ -220,12 +244,12 @@ public class FurnitureSpriteController : BaseSpriteController<Furniture>
         objectGameObjectMap.Remove(furn);
         GameObject.Destroy(furn_go);
 
-        if (powerStatusGameObjectMap.ContainsKey(furn) == false)
+        if (childObjectMap.ContainsKey(furn) == false)
         {
             return;
         }
 
-        powerStatusGameObjectMap.Remove(furn);
+        childObjectMap.Remove(furn);
     }
         
     private void OnIsOperatingChanged(Furniture furniture)
@@ -235,13 +259,17 @@ public class FurnitureSpriteController : BaseSpriteController<Furniture>
             return;
         }
 
-        if (powerStatusGameObjectMap.ContainsKey(furniture) == false)
+        if (childObjectMap.ContainsKey(furniture) == false)
         {
             return;
         }
 
-        GameObject powerGameObject = powerStatusGameObjectMap[furniture];
-        if (furniture.IsOperating)
+        UpdateIconObjectsVisibility(furniture, childObjectMap[furniture].PowerStatusIndicator);
+    }
+
+    private void UpdateIconObjectsVisibility(Furniture furniture, GameObject powerGameObject)
+    {
+        if ((furniture.Requirements & BuildableComponent.Requirements.Power) == 0)
         {
             powerGameObject.SetActive(false);
         }
@@ -275,5 +303,18 @@ public class FurnitureSpriteController : BaseSpriteController<Furniture>
     private Sprite GetPowerStatusSprite()
     {
         return SpriteManager.GetSprite("Power", "PowerIcon");
+    }
+
+    public class FurnitureChildObjects
+    {
+        public GameObject Overlay { get; set; }
+
+        public GameObject PowerStatusIndicator { get; set; }
+
+        public void Destroy()
+        {
+            GameObject.Destroy(Overlay);
+            GameObject.Destroy(PowerStatusIndicator);
+        }
     }
 }

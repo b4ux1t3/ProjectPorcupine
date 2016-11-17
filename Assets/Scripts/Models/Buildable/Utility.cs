@@ -1,19 +1,20 @@
 #region License
 // ====================================================
 // Project Porcupine Copyright(C) 2016 Team Porcupine
-// This program comes with ABSOLUTELY NO WARRANTY; This is free software, 
-// and you are welcome to redistribute it under certain conditions; See 
+// This program comes with ABSOLUTELY NO WARRANTY; This is free software,
+// and you are welcome to redistribute it under certain conditions; See
 // file LICENSE, which is part of this source code package, for details.
 // ====================================================
 #endregion
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Xml;
-using System.Xml.Schema;
-using System.Xml.Serialization;
-using Animation;
 using MoonSharp.Interpreter;
 using MoonSharp.Interpreter.Interop;
+using Newtonsoft.Json.Linq;
+using ProjectPorcupine.Buildable.Components;
+using ProjectPorcupine.Jobs;
 using ProjectPorcupine.PowerNetwork;
 using UnityEngine;
 
@@ -21,10 +22,12 @@ using UnityEngine;
 /// InstalledObjects are things like walls, doors, and utility (e.g. a sofa).
 /// </summary>
 [MoonSharpUserData]
-public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextActionProvider, IBuildable
+public class Utility : ISelectable, IPrototypable, IContextActionProvider, IBuildable
 {
     // Prevent construction too close to the world's edge
     private const int MinEdgeDistance = 5;
+
+    private bool gridUpdatedThisFrame = false;
 
     /// <summary>
     /// This action is called to get the sprite name based on the utility parameters.
@@ -43,13 +46,10 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
 
     private string description = string.Empty;
 
-    private Func<Tile, bool> funcPositionValidation;
-
     private HashSet<string> tileTypeBuildPermissions;
 
     private List<Inventory> deconstructInventory;
 
-    /// TODO: Implement object rotation
     /// <summary>
     /// Initializes a new instance of the <see cref="Utility"/> class.
     /// </summary>
@@ -62,7 +62,6 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
         Parameters = new Parameter();
         Jobs = new BuildableJobs(this);
         typeTags = new HashSet<string>();
-        funcPositionValidation = DefaultIsValidPosition;
         tileTypeBuildPermissions = new HashSet<string>();
     }
 
@@ -95,11 +94,6 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
 
         getSpriteNameAction = other.getSpriteNameAction;
 
-        if (other.funcPositionValidation != null)
-        {
-            funcPositionValidation = (Func<Tile, bool>)other.funcPositionValidation.Clone();
-        }
-
         tileTypeBuildPermissions = new HashSet<string>(other.tileTypeBuildPermissions);
 
         LocalizationCode = other.LocalizationCode;
@@ -120,16 +114,16 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
     /// <summary>
     /// Gets the width of the utility.
     /// </summary>
-    public int Width 
-    { 
+    public int Width
+    {
         get { return 1; }
     }
 
     /// <summary>
     /// Gets the height of the utility.
     /// </summary>
-    public int Height 
-    { 
+    public int Height
+    {
         get { return 1; }
     }
 
@@ -161,7 +155,7 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
     public Tile Tile { get; private set; }
 
     /// <summary>
-    /// Gets the string that defines the type of object the utility is. This gets queried by the visual system to 
+    /// Gets the string that defines the type of object the utility is. This gets queried by the visual system to
     /// know what sprite to render for this utility.
     /// </summary>
     /// <value>The type of the utility.</value>
@@ -198,17 +192,17 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
     /// Gets a value indicating whether this utility is next to any utility of the same type.
     /// This is used to check what sprite to use if utility is next to each other.
     /// </summary>
-    public bool LinksToNeighbour 
-    { 
+    public bool LinksToNeighbour
+    {
         get { return true; }
     }
 
     /// <summary>
-    /// Gets the type of dragging that is used to build multiples of this utility. 
+    /// Gets the type of dragging that is used to build multiples of this utility.
     /// e.g walls.
     /// </summary>
-    public string DragType 
-    { 
+    public string DragType
+    {
         get { return "path"; }
     }
 
@@ -228,14 +222,22 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
     public bool IsBeingDestroyed { get; protected set; }
 
     /// <summary>
+    /// Gets or sets the grid used by this utility.
+    /// </summary>
+    /// <value>The grid used by this utility.</value>
+    public Grid Grid { get; set; }
+
+    /// <summary>
     /// Used to place utility in a certain position.
     /// </summary>
     /// <param name="proto">The prototype utility to place.</param>
     /// <param name="tile">The base tile to place the utility on, The tile will be the bottom left corner of the utility (to check).</param>
+    /// <param name="skipGridUpdate">If true, the grid won't be updated from neighboring Utilities, UpdateGrid must be called on at least one
+    /// utility connected to this utility for them to network properly.</param>
     /// <returns>Utility object.</returns>
-    public static Utility PlaceInstance(Utility proto, Tile tile)
+    public static Utility PlaceInstance(Utility proto, Tile tile, bool skipGridUpdate = false)
     {
-        if (proto.funcPositionValidation(tile) == false)
+        if (proto.IsValidPosition(tile) == false)
         {
             Debug.ULogErrorChannel("Utility", "PlaceInstance -- Position Validity Function returned FALSE. " + proto.Name + " " + tile.X + ", " + tile.Y + ", " + tile.Z);
             return null;
@@ -255,32 +257,41 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
             return null;
         }
 
-        // This type of utility links itself to its neighbours,
+        // All utilities link to neighbors of the same type,
         // so we should inform our neighbours that they have a new
         // buddy.  Just trigger their OnChangedCallback.
-        int x = tile.X;
-        int y = tile.Y;
-
-        for (int xpos = x - 1; xpos < x + 2; xpos++)
+        foreach (Tile neighbor in obj.Tile.GetNeighbours())
         {
-            for (int ypos = y - 1; ypos < y + 2; ypos++)
+            if (neighbor.Utilities != null && neighbor.Utilities.ContainsKey(obj.Name))
             {
-                Tile tileAt = World.Current.GetTileAt(xpos, ypos, tile.Z);
-                if (tileAt != null && tileAt.Utilities != null)
+                Utility utility = neighbor.Utilities[obj.Name];
+                if (utility.Changed != null)
                 {
-                    foreach (Utility utility in tileAt.Utilities.Values)
-                    {
-                        if (utility.Changed != null)
-                        {
-                            utility.Changed(utility);
-                        }
-                    }
+                    utility.Changed(utility);
                 }
             }
         }
 
+        if (!skipGridUpdate)
+        {
+            obj.UpdateGrid(obj);
+        }
+        else
+        {
+            // If we're skipping the update, we need a temporary grid for furniture in the same tile to connect to.
+            obj.Grid = new Grid();
+            World.Current.PowerNetwork.RegisterGrid(obj.Grid);
+        }
+
+        if (obj.Tile != null && obj.Tile.Furniture != null && obj.Tile.Furniture.GetComponent<PowerConnection>("PowerConnection") != null)
+        {
+            // HACK: This will work for now, but needs expanded when we have other types of connections we'll want to plug in
+            obj.Tile.Furniture.GetComponent<PowerConnection>("PowerConnection").Reconnect();
+        }
+
         // Call LUA install scripts
         obj.EventActions.Trigger("OnInstall", obj);
+
         return obj;
     }
 
@@ -289,7 +300,17 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
     /// This checks if the utility is a PowerConsumer, and if it does not have power it cancels its job.
     /// </summary>
     /// <param name="deltaTime">The time since the last update was called.</param>
-    public void Update(float deltaTime)
+    public void EveryFrameUpdate(float deltaTime)
+    {
+        gridUpdatedThisFrame = false;
+    }
+
+    /// <summary>
+    /// This function is called to update the utility. This will also trigger EventsActions.
+    /// This checks if the utility is a PowerConsumer, and if it does not have power it cancels its job.
+    /// </summary>
+    /// <param name="deltaTime">The time since the last update was called.</param>
+    public void FixedFrequencyUpdate(float deltaTime)
     {
         if (EventActions != null)
         {
@@ -311,42 +332,6 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
 
         DynValue ret = FunctionsManager.Utility.Call(getSpriteNameAction, this);
         return ret.String;
-    }
-
-    /// <summary>
-    /// Check if the position of the utility is valid or not.
-    /// This is called when placing the utility.
-    /// </summary>
-    /// <param name="tile">The base tile.</param>
-    /// <returns>True if the tile is valid for the placement of the utility.</returns>
-    public bool IsValidPosition(Tile tile)
-    {
-        return funcPositionValidation(tile);
-    }
-
-    /// <summary>
-    /// This does absolutely nothing.
-    /// This is required to implement IXmlSerializable.
-    /// </summary>
-    /// <returns>NULL and NULL.</returns>
-    public XmlSchema GetSchema()
-    {
-        return null;
-    }
-
-    /// <summary>
-    /// Writes the utility to XML.
-    /// </summary>
-    /// <param name="writer">The XML writer to write to.</param>
-    public void WriteXml(XmlWriter writer)
-    {
-        writer.WriteAttributeString("X", Tile.X.ToString());
-        writer.WriteAttributeString("Y", Tile.Y.ToString());
-        writer.WriteAttributeString("Z", Tile.Z.ToString());
-        writer.WriteAttributeString("type", Type);
-
-        // Let the Parameters handle their own xml
-        Parameters.WriteXml(writer);
     }
 
     /// <summary>
@@ -417,21 +402,6 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
     }
 
     /// <summary>
-    /// Reads the specified XMLReader (pass it to <see cref="ReadXmlParams(XmlReader)"/>)
-    /// This is used to load utility from a save file.
-    /// </summary>
-    /// <param name="reader">The XML reader to read from.</param>
-    public void ReadXml(XmlReader reader)
-    {
-        // X, Y, and type have already been set, and we should already
-        // be assigned to a tile.  So just read extra data if we have any.
-        if (!reader.IsEmptyElement)
-        {
-            ReadXmlParams(reader);
-        }
-    }
-
-    /// <summary>
     /// Reads the XML for parameters that this utility has and assign it to the utility.
     /// </summary>
     /// <param name="reader">The reader to read the parameters from.</param>
@@ -449,7 +419,9 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
     public void ReadXmlBuildingJob(XmlReader reader)
     {
         float jobTime = float.Parse(reader.GetAttribute("jobTime"));
-        List<Inventory> invs = new List<Inventory>();
+
+        List<RequestedItem> items = new List<RequestedItem>();
+
         XmlReader inventoryReader = reader.ReadSubtree();
 
         while (inventoryReader.Read())
@@ -457,32 +429,30 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
             if (inventoryReader.Name == "Inventory")
             {
                 // Found an inventory requirement, so add it to the list!
-                invs.Add(new Inventory(
-                    inventoryReader.GetAttribute("type"),
-                    0,
-                    int.Parse(inventoryReader.GetAttribute("amount"))));
+                int amount = int.Parse(inventoryReader.GetAttribute("amount"));
+                items.Add(new RequestedItem(inventoryReader.GetAttribute("type"), amount));
             }
         }
 
         Job job = new Job(
             null,
             Type,
-            (theJob) => World.Current.JobComplete_UtilityBuilding(theJob),
+            (theJob) => World.Current.UtilityManager.ConstructJobCompleted(theJob),
             jobTime,
-            invs.ToArray(),
+            items.ToArray(),
             Job.JobPriority.High);
-        job.JobDescription = "job_build_" + Type + "_desc";
+        job.Description = "job_build_" + Type + "_desc";
         PrototypeManager.UtilityConstructJob.Set(job);
     }
 
     /// <summary>
     /// Sets up a job to deconstruct the utility.
     /// </summary>
-    public void SetDeconstructJob(Utility utility)
+    public void SetDeconstructJob()
     {
         if (Settings.GetSetting("DialogBoxSettings_developerModeToggle", false))
         {
-            Deconstruct(utility);
+            Deconstruct();
             return;
         }
 
@@ -492,11 +462,11 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
         }
 
         IsBeingDestroyed = true;
-        utility.Jobs.CancelAll();
+        Jobs.CancelAll();
 
         Job job = PrototypeManager.UtilityDeconstructJob.Get(Type).Clone();
         job.tile = Tile;
-        job.OnJobCompleted += (inJob) => Deconstruct(utility);
+        job.OnJobCompleted += (inJob) => Deconstruct();
 
         World.Current.jobQueue.Enqueue(job);
     }
@@ -504,18 +474,19 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
     /// <summary>
     /// Deconstructs the utility.
     /// </summary>
-    public void Deconstruct(Utility utility)
+    public void Deconstruct()
     {
-        int x = Tile.X;
-        int y = Tile.Y;
         if (Tile.Utilities != null)
         {
-            utility.Jobs.CancelAll();
+            Jobs.CancelAll();
         }
+
+        // Just unregister our grid, it will get reregistered if there are any other utilities on this grid
+        World.Current.PowerNetwork.RemoveGrid(Grid);
 
         // We call lua to decostruct
         EventActions.Trigger("OnUninstall", this);
-        Tile.UnplaceUtility();
+        Tile.UnplaceUtility(this);
 
         if (Removed != null)
         {
@@ -527,28 +498,29 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
             foreach (Inventory inv in deconstructInventory)
             {
                 inv.MaxStackSize = PrototypeManager.Inventory.Get(inv.Type).maxStackSize;
-                World.Current.inventoryManager.PlaceInventoryAround(Tile, inv.Clone());
+                World.Current.InventoryManager.PlaceInventoryAround(Tile, inv.Clone());
             }
         }
 
-        // We should inform our neighbours that they have just lost a
-        // neighbour regardless of type.  
-        // Just trigger their OnChangedCallback. 
-        for (int xpos = x - 1; xpos < x + 2; xpos++)
+        // We should inform our neighbours that they have just lost a neighbour.
+        // Just trigger their OnChangedCallback.
+        foreach (Tile neighbor in Tile.GetNeighbours())
         {
-            for (int ypos = y - 1; ypos < y + 2; ypos++)
+            if (neighbor.Utilities != null && neighbor.Utilities.ContainsKey(this.Name))
             {
-                Tile tileAt = World.Current.GetTileAt(xpos, ypos, Tile.Z);
-                if (tileAt != null && tileAt.Utilities != null)
+                Utility neighborUtility = neighbor.Utilities[this.Name];
+                if (neighborUtility.Changed != null)
                 {
-                    foreach (Utility neighborUtility in tileAt.Utilities.Values)
-                    {
-                        if (neighborUtility.Changed != null)
-                        {
-                            neighborUtility.Changed(utility);
-                        }
-                    }
+                    neighborUtility.Changed(neighborUtility);
                 }
+
+                if (neighborUtility.Grid == this.Grid)
+                {
+                    neighborUtility.Grid = new Grid();
+                }
+
+                neighborUtility.UpdateGrid(neighborUtility);
+                neighborUtility.Grid.Split();
             }
         }
 
@@ -564,6 +536,15 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
     public bool HasTypeTag(string typeTag)
     {
         return typeTags.Contains(typeTag);
+    }
+
+    /// <summary>
+    /// Gets the type tags.
+    /// </summary>
+    /// <returns>The type tags.</returns>
+    public string[] GetTypeTags()
+    {
+        return typeTags.ToArray();
     }
 
     /// <summary>
@@ -609,7 +590,7 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
         {
             Text = "Deconstruct " + Name,
             RequireCharacterSelected = false,
-            Action = (contextMenuAction, character) => SetDeconstructJob(this)
+            Action = (contextMenuAction, character) => SetDeconstructJob()
         };
         if (Jobs.Count > 0)
         {
@@ -655,6 +636,134 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
         return new Utility(this);
     }
 
+    /// <summary>
+    /// Check if the position of the utility is valid or not.
+    /// This is called when placing the utility.
+    /// TODO : Add some LUA special requierments.
+    /// </summary>
+    /// <param name="tile">The base tile.</param>
+    /// <returns>True if the tile is valid for the placement of the utility.</returns>
+    public bool IsValidPosition(Tile tile)
+    {
+        bool tooCloseToEdge = tile.X < MinEdgeDistance || tile.Y < MinEdgeDistance ||
+                              World.Current.Width - tile.X <= MinEdgeDistance ||
+                              World.Current.Height - tile.Y <= MinEdgeDistance;
+
+        if (tooCloseToEdge)
+        {
+            return false;
+        }
+
+        if (HasTypeTag("OutdoorOnly"))
+        {
+            if (tile.Room == null || !tile.Room.IsOutsideRoom())
+            {
+                return false;
+            }
+        }
+
+        // Make sure tile is FLOOR
+        if (tile.Type != TileType.Floor && tileTypeBuildPermissions.Contains(tile.Type.Type) == false)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Updates the grids of this utility sharing the grids along the network of connected utilities.
+    /// </summary>
+    /// <param name="utilityToUpdate">Utility to update.</param>
+    /// <param name="newGrid">If not null this will force neighboring utilities to use the specified Instance of Grid.</param>
+    public void UpdateGrid(Utility utilityToUpdate, Grid newGrid = null)
+    {
+        if (gridUpdatedThisFrame)
+        {
+            return;
+        }
+
+        gridUpdatedThisFrame = true;
+        Grid oldGrid = utilityToUpdate.Grid;
+
+        World.Current.PowerNetwork.RemoveGrid(utilityToUpdate.Grid);
+
+        if (newGrid == null)
+        {
+            foreach (Tile neighborTile in utilityToUpdate.Tile.GetNeighbours())
+            {
+                if (neighborTile != null && neighborTile.Utilities != null && neighborTile.Utilities.ContainsKey(this.Name))
+                {
+                    Utility utility = neighborTile.Utilities[this.Name];
+
+                    if (utility.Grid != null && utilityToUpdate.Grid == null)
+                    {
+                        utilityToUpdate.Grid = utility.Grid;
+                    }
+                }
+            }
+
+            if (utilityToUpdate.Grid == null)
+            {
+                utilityToUpdate.Grid = new Grid();
+            }
+        }
+        else
+        {
+            utilityToUpdate.Grid = newGrid;
+        }
+
+        if (utilityToUpdate.Grid != oldGrid)
+        {
+            World.Current.PowerNetwork.UnregisterGrid(oldGrid);
+        }
+
+        if (oldGrid != null && newGrid != null)
+        {
+            newGrid.Merge(oldGrid);
+        }
+
+        World.Current.PowerNetwork.RegisterGrid(utilityToUpdate.Grid);
+
+        foreach (Tile neighborTile in utilityToUpdate.Tile.GetNeighbours())
+        {
+            if (neighborTile != null && neighborTile.Utilities != null)
+            {
+                if (neighborTile != null && neighborTile.Utilities != null && neighborTile.Utilities.ContainsKey(this.Name))
+                {
+                    Utility utility = neighborTile.Utilities[this.Name];
+                    utility.UpdateGrid(utility, utilityToUpdate.Grid);
+                }
+            }
+        }
+    }
+
+    public object ToJSon()
+    {
+        JObject utilityJSon = new JObject();
+        utilityJSon.Add("X", Tile.X);
+        utilityJSon.Add("Y", Tile.Y);
+        utilityJSon.Add("Z", Tile.Z);
+        utilityJSon.Add("Type", Type);
+        if (Parameters.HasContents())
+        {
+            utilityJSon.Add("Parameters", Parameters.ToJson());
+        }
+
+        return utilityJSon;
+    }
+
+    public void FromJson(JToken utilityToken)
+    {
+        JObject utilityJObject = (JObject)utilityToken;
+
+        // Everything else has already been set by FurnitureManager, we just need our parameters
+        if (utilityJObject.Children().Contains("Parameters"))
+        {
+            Parameters.FromJson(utilityJObject["Parameters"]);
+        }
+    }
+
     private void ReadXmlDeconstructJob(XmlReader reader)
     {
         float jobTime = float.Parse(reader.GetAttribute("jobTime"));
@@ -681,42 +790,8 @@ public class Utility : IXmlSerializable, ISelectable, IPrototypable, IContextAct
                     jobTime,
                     null,
                     Job.JobPriority.High);
-        job.JobDescription = "job_deconstruct_" + Type + "_desc";
+        job.Description = "job_deconstruct_" + Type + "_desc";
         PrototypeManager.UtilityDeconstructJob.Set(job);
-    }
-
-    // FIXME: These functions should never be called directly,
-    // so they probably shouldn't be public functions of Utility
-    // This will be replaced by validation checks fed to use from
-    // LUA files that will be customizable for each piece of utility.
-    // For example, a door might specific that it needs two walls to
-    // connect to.
-    private bool DefaultIsValidPosition(Tile tile)
-    {
-        bool tooCloseToEdge = tile.X < MinEdgeDistance || tile.Y < MinEdgeDistance ||
-                              World.Current.Width - tile.X <= MinEdgeDistance ||
-                              World.Current.Height - tile.Y <= MinEdgeDistance;
-
-        if (tooCloseToEdge)
-        {
-            return false;
-        }
-
-        if (HasTypeTag("OutdoorOnly"))
-        {
-            if (tile.Room == null || !tile.Room.IsOutsideRoom())
-            {
-                return false;
-            }
-        }
-
-        // Make sure tile is FLOOR
-        if (tile.Type != TileType.Floor && tileTypeBuildPermissions.Contains(tile.Type.Type) == false)
-        {
-            return false;
-        }
-
-        return true;
     }
 
     private void InvokeContextMenuLuaAction(ContextMenuAction action, Character character)

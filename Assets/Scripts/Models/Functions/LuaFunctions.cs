@@ -6,14 +6,15 @@
 // file LICENSE, which is part of this source code package, for details.
 // ====================================================
 #endregion
+
 using System;
-using System.IO;
 using MoonSharp.Interpreter;
 using ProjectPorcupine.PowerNetwork;
 
-public class LuaFunctions
+public class LuaFunctions : IFunctions
 {
     protected Script script;
+    private string scriptName;
 
     public LuaFunctions()
     {
@@ -34,15 +35,12 @@ public class LuaFunctions
         RegisterGlobal(typeof(Connection));
         RegisterGlobal(typeof(Scheduler.Scheduler));
         RegisterGlobal(typeof(Scheduler.ScheduledEvent));
+        RegisterGlobal(typeof(ProjectPorcupine.Jobs.RequestedItem));
     }
-
-    /// <summary>
-    /// Registers a class as a global entity to use it inside of lua.
-    /// </summary>
-    /// <param name="type">Class typeof.</param>
-    public void RegisterGlobal(Type type)
+    
+    public bool HasFunction(string name)
     {
-        script.Globals[type.Name] = type;
+        return name != null && script.Globals[name] != null;
     }
 
     /// <summary>
@@ -52,6 +50,7 @@ public class LuaFunctions
     /// <param name="scriptName">The script name.</param>
     public bool LoadScript(string text, string scriptName)
     {
+        this.scriptName = scriptName;
         try
         {
             script.DoString(text);
@@ -73,22 +72,21 @@ public class LuaFunctions
     public DynValue Call(string functionName, params object[] args)
     {
         object func = script.Globals[functionName];
-
-        if (func == null)
-        {
-            Debug.ULogChannel("Lua", "'" + functionName + "' is not a LUA function!");
-            return null;
-        }
-
+                
         try
         {
             return script.Call(func, args);
         }
         catch (ScriptRuntimeException e)
         {
-            Debug.ULogErrorChannel("Lua", e.DecoratedMessage);
+            Debug.ULogErrorChannel("Lua", "[" + scriptName + "] LUA RunTime error: " + e.DecoratedMessage);
             return null;
         }
+    }
+
+    public T Call<T>(string functionName, params object[] args)
+    {
+        return Call(functionName, args).ToObject<T>();
     }
 
     /// <summary>
@@ -97,7 +95,7 @@ public class LuaFunctions
     /// <param name="functionNames">Function names.</param>
     /// <param name="instance">An instance of the actions type.</param>
     /// <param name="deltaTime">Delta time.</param>
-    public void CallWithInstance(string[] functionNames, object instance, float deltaTime = 0f)
+    public void CallWithInstance(string[] functionNames, object instance, params object[] parameters)
     {
         if (instance == null)
         {
@@ -113,20 +111,32 @@ public class LuaFunctions
                 return;
             }
 
-            DynValue result;
-            if (deltaTime != 0f)
-            {
-                result = Call(fn, instance, deltaTime);
-            }
-            else
-            {
-                result = Call(fn, instance);
-            }
+            object[] instanceAndParams = new object[parameters.Length + 1];
+            instanceAndParams[0] = instance;
+            parameters.CopyTo(instanceAndParams, 1);
 
-            if (result != null && result.Type == DataType.String)
+            try
             {
-                Debug.ULogErrorChannel("Lua", result.String);
+                Call(fn, instanceAndParams);
+            }
+            catch (ScriptRuntimeException e)
+            {
+                Debug.ULogErrorChannel("Lua", "[" + scriptName + "] LUA RunTime error: " + e.DecoratedMessage);
             }
         }
+    }
+
+    public void RegisterType(Type type)
+    {
+        RegisterGlobal(type);
+    }
+
+    /// <summary>
+    /// Registers a class as a global entity to use it inside of lua.
+    /// </summary>
+    /// <param name="type">Class typeof.</param>
+    private void RegisterGlobal(Type type)
+    {
+        script.Globals[type.Name] = type;
     }
 }

@@ -6,6 +6,7 @@
 // file LICENSE, which is part of this source code package, for details.
 // ====================================================
 #endregion
+
 using System.Collections.Generic;
 using ProjectPorcupine.Localization;
 using UnityEngine;
@@ -14,8 +15,7 @@ using UnityEngine.UI;
 public class DialogBoxSettings : DialogBox
 {
     // FPS Option.
-    public Toggle fpsToggle;
-    public GameObject fpsObject;
+    public Dropdown performanceDropdown;
 
     public Toggle fullScreenToggle;
 
@@ -30,55 +30,55 @@ public class DialogBoxSettings : DialogBox
     public Dropdown vsyncDropdown;
     public Dropdown qualityDropdown;
 
+    public InputField autosaveInterval;
+    public InputField autosaveFiles;
+
     public Button closeButton;
     public Button saveButton;
+    public Button applyButton;
 
-    public void OnFPSToggle()
+    public void OnSave()
     {
-        fpsObject.SetActive(fpsToggle.isOn);
+        if (WorldController.Instance != null)
+        {
+            WorldController.Instance.spawnInventoryController.SetUIVisibility(developerModeToggle.isOn);
+        }
+
+        OnApply();
+        SaveSetting();
+
+        CloseDialog();
     }
 
-    public void OnFullScreenToggle()
+    public void OnApply()
     {
-        Screen.fullScreen = fullScreenToggle.isOn;
-    }
+        LocalizationTable.SetLocalization(languageDropdown.value);
 
-    public void OnQualityChange()
-    {
+        if (WorldController.Instance != null)
+        {
+            WorldController.Instance.spawnInventoryController.SetUIVisibility(developerModeToggle.isOn);
+        }
+
         // MasterTextureLimit should get 0 for High quality and higher values for lower qualities.
         // For example count is 3 (0:Low, 1:Med, 2:High).
         // For High: count - 1 - value  =  3 - 1 - 2  =  0  (therefore no limit = high quality).
         // For Med:  count - 1 - value  =  3 - 1 - 1  =  1  (therefore a slight limit = medium quality).
         // For Low:  count - 1 - value  =  3 - 1 - 0  =  1  (therefore more limit = low quality).
         QualitySettings.masterTextureLimit = qualityDropdown.options.Count - 1 - qualityDropdown.value;
-    }
 
-    public void OnVSyncChange()
-    {
-        /// TODO : Implement VSync changes.
-    }
+        Screen.fullScreen = fullScreenToggle.isOn;
 
-    public void OnResolutionChange()
-    {
-        /// TODO : Implement Resolution changes.
-    }
+        ResolutionOption selectedOption = (ResolutionOption)resolutionDropdown.options[resolutionDropdown.value];
+        Resolution resolution = selectedOption.Resolution;
+        Screen.SetResolution(resolution.width, resolution.height, fullScreenToggle.isOn, resolution.refreshRate);
 
-    public void OnMusicChange()
-    {
-        /// TODO : Implement Music changes.
-    }
+        if (WorldController.Instance != null)
+        {
+            WorldController.Instance.autosaveManager.SetAutosaveInterval(int.Parse(autosaveInterval.text));
+        }
 
-    public void OnClickClose()
-    {
-        this.CloseDialog();
-    }
-
-    public void OnClickSave()
-    {
-        this.CloseDialog();
-        WorldController.Instance.spawnInventoryController.SetUIVisibility(developerModeToggle.isOn);
-        LocalizationTable.SetLocalization(languageDropdown.value);
-        SaveSetting();
+        // One to many but we want an applying feature;
+        PerformanceHUDManager.DirtyUI();
     }
 
     /// <summary>
@@ -88,63 +88,45 @@ public class DialogBoxSettings : DialogBox
     {
         Settings.SetSetting("DialogBoxSettings_musicVolume", musicVolume.normalizedValue);
 
-        Settings.SetSetting("DialogBoxSettings_fpsToggle", fpsToggle.isOn);
         Settings.SetSetting("DialogBoxSettings_fullScreenToggle", fullScreenToggle.isOn);
         Settings.SetSetting("DialogBoxSettings_developerModeToggle", developerModeToggle.isOn);
 
+        Settings.SetSetting("DialogBoxSettings_performanceGroup", performanceDropdown.value);
         Settings.SetSetting("DialogBoxSettings_qualityDropdown", qualityDropdown.value);
         Settings.SetSetting("DialogBoxSettings_vSyncDropdown", vsyncDropdown.value);
         Settings.SetSetting("DialogBoxSettings_resolutionDropdown", resolutionDropdown.value);
+        Settings.SetSetting("AutosaveInterval", int.Parse(autosaveInterval.text));
+        Settings.SetSetting("AutosaveFiles", int.Parse(autosaveFiles.text));
+        Settings.SaveSettings();
+
+        PerformanceHUDManager.DirtyUI();
     }
 
-    private void OnEnable()
+    public void OnEnable()
     {
         // Get all avalible resolution for the display.
         resolutions = Screen.resolutions;
 
         // Add our listeners.
-        closeButton.onClick.AddListener(delegate
-        {
-            OnClickClose();
-        });
-        saveButton.onClick.AddListener(delegate
-        {
-            OnClickSave();
-        });
-
-        fpsToggle.onValueChanged.AddListener(delegate
-        {
-            OnFPSToggle();
-        });
+        closeButton.onClick.AddListener(CloseDialog);
+        saveButton.onClick.AddListener(OnSave);
+        applyButton.onClick.AddListener(OnApply);
 
         fullScreenToggle.isOn = Screen.fullScreen;
-        fullScreenToggle.onValueChanged.AddListener(delegate
-        {
-            OnFullScreenToggle();
-        });
-        resolutionDropdown.onValueChanged.AddListener(delegate
-        {
-            OnResolutionChange();
-        });
-        vsyncDropdown.onValueChanged.AddListener(delegate
-        {
-            OnVSyncChange();
-        });
-        qualityDropdown.onValueChanged.AddListener(delegate
-        {
-            OnQualityChange();
-        });
 
-        musicVolume.onValueChanged.AddListener(delegate
-        {
-            OnMusicChange();
-        });
-
-        // Create the drop down for resolution.
-        CreateResDropDown();
+        CreateResolutionDropdown();
+        CreatePerformanceHUDDropdown();
 
         // Load the setting.
         LoadSetting();
+    }
+
+    public void Update()
+    {
+        if (Input.GetKey(KeyCode.Escape))
+        {
+            CloseDialog();
+        }
     }
 
     /// <summary>
@@ -154,31 +136,68 @@ public class DialogBoxSettings : DialogBox
     {
         musicVolume.normalizedValue = Settings.GetSetting("DialogBoxSettings_musicVolume", 0.5f);
 
-        fpsToggle.isOn = Settings.GetSetting("DialogBoxSettings_fpsToggle", true);
         fullScreenToggle.isOn = Settings.GetSetting("DialogBoxSettings_fullScreenToggle", true);
         developerModeToggle.isOn = Settings.GetSetting("DialogBoxSettings_developerModeToggle", false);
 
+        performanceDropdown.value = Settings.GetSetting("DialogBoxSettings_performanceGroup", 1);
         qualityDropdown.value = Settings.GetSetting("DialogBoxSettings_qualityDropdown", 0);
         vsyncDropdown.value = Settings.GetSetting("DialogBoxSettings_vSyncDropdown", 0);
         resolutionDropdown.value = Settings.GetSetting("DialogBoxSettings_resolutionDropdown", 0);
+
+        autosaveInterval.text = Settings.GetSetting("AutosaveInterval", 2).ToString();
+        autosaveFiles.text = Settings.GetSetting("AutosaveFiles", 5).ToString();
     }
 
-    private void CreateResDropDown()
+    /// <summary>
+    /// Create the differents option for the resolution dropdown.
+    /// </summary>
+    private void CreateResolutionDropdown()
     {
-        List<string> resolutionStrings = new List<string>();
-        foreach (Resolution r in resolutions)
+        resolutionDropdown.ClearOptions();
+        List<Dropdown.OptionData> options = new List<Dropdown.OptionData>();
+        options.Add(new ResolutionOption
         {
-            resolutionStrings.Add(r.ToString());
+            text = string.Format(
+                "{0} x {1} @ {2}",
+                Screen.currentResolution.width,
+                Screen.currentResolution.height,
+                Screen.currentResolution.refreshRate),
+            Resolution = Screen.currentResolution
+        });
+
+        foreach (Resolution resolution in Screen.resolutions)
+        {
+            options.Add(new ResolutionOption
+            {
+                text = string.Format(
+                    "{0} x {1} @ {2}",
+                    resolution.width,
+                    resolution.height,
+                    resolution.refreshRate),
+                Resolution = resolution
+            });
         }
 
-        resolutionDropdown.AddOptions(resolutionStrings);
+        resolutionDropdown.AddOptions(options);
     }
 
-    private void Update()
+    /// <summary>
+    /// Create the differents option for the performance HUD dropdown.
+    /// </summary>
+    private void CreatePerformanceHUDDropdown()
     {
-        if (Input.GetKey(KeyCode.Escape))
+        performanceDropdown.ClearOptions();
+        List<Dropdown.OptionData> options = new List<Dropdown.OptionData>();
+        foreach (PerformanceComponentGroup option in PerformanceComponentGroups.groups)
         {
-            this.CloseDialog();
+            options.Add(new Dropdown.OptionData(option.groupName));
         }
+
+        performanceDropdown.AddOptions(options);
+    }
+
+    private class ResolutionOption : Dropdown.OptionData
+    {
+        public Resolution Resolution { get; set; }
     }
 }

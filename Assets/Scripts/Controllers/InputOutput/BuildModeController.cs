@@ -1,18 +1,19 @@
 #region License
 // ====================================================
 // Project Porcupine Copyright(C) 2016 Team Porcupine
-// This program comes with ABSOLUTELY NO WARRANTY; This is free software, 
-// and you are welcome to redistribute it under certain conditions; See 
+// This program comes with ABSOLUTELY NO WARRANTY; This is free software,
+// and you are welcome to redistribute it under certain conditions; See
 // file LICENSE, which is part of this source code package, for details.
 // ====================================================
 #endregion
+using System.Collections.Generic;
 using System.Linq;
-using MoonSharp.Interpreter;
-using UnityEngine;
+using ProjectPorcupine.Rooms;
 
 public enum BuildMode
 {
     FLOOR,
+    ROOMBEHAVIOR,
     FURNITURE,
     UTILITY,
     DECONSTRUCT
@@ -26,6 +27,19 @@ public class BuildModeController
     private MouseController mouseController;
     private TileType buildModeTile = TileType.Floor;
 
+    public BuildModeController()
+    {
+        Instance = this;
+        CurrentPreviewRotation = 0f;
+        KeyboardManager.Instance.RegisterInputAction("RotateFurnitureLeft", KeyboardMappedInputType.KeyUp, RotateFurnitireLeft);
+        KeyboardManager.Instance.RegisterInputAction("RotateFurnitureRight", KeyboardMappedInputType.KeyUp, RotateFurnitireRight);
+    }
+
+    public static BuildModeController Instance { get; protected set; }
+
+    // The rotation applied to the object.
+    public float CurrentPreviewRotation { get; private set; }
+
     // Use this for initialization
     public void SetMouseController(MouseController currentMouseController)
     {
@@ -38,6 +52,12 @@ public class BuildModeController
         {
             // floors are draggable
             return true;
+        }
+
+        if (buildMode == BuildMode.ROOMBEHAVIOR)
+        {
+            // Room Behaviors are not draggable
+            return false;
         }
 
         Furniture proto = PrototypeManager.Furniture.Get(buildModeType);
@@ -57,12 +77,20 @@ public class BuildModeController
 
         mouseController.StartBuildMode();
     }
-    
+
+    public void SetMode_DesignateRoomBehavior(string type)
+    {
+        buildMode = BuildMode.ROOMBEHAVIOR;
+        buildModeType = type;
+        mouseController.StartBuildMode();
+    }
+
     public void SetMode_BuildFurniture(string type)
     {
         // Wall is not a Tile!  Wall is an "Furniture" that exists on TOP of a tile.
         buildMode = BuildMode.FURNITURE;
         buildModeType = type;
+        CurrentPreviewRotation = 0f;
         mouseController.StartBuildMode();
     }
 
@@ -82,7 +110,17 @@ public class BuildModeController
 
     public void DoBuild(Tile tile)
     {
-        if (buildMode == BuildMode.FURNITURE)
+        if (buildMode == BuildMode.ROOMBEHAVIOR)
+        {
+            string roomBehaviorType = buildModeType;
+
+            if (tile.Room != null && WorldController.Instance.World.IsRoomBehaviorValidForRoom(roomBehaviorType, tile.Room))
+            {
+                RoomBehavior proto = PrototypeManager.RoomBehavior.Get(roomBehaviorType); 
+                tile.Room.DesignateRoomBehavior(proto.Clone());
+            }
+        }
+        else if (buildMode == BuildMode.FURNITURE)
         {
             // Create the Furniture and assign it to the tile
             // Can we build the furniture in the selected tile?
@@ -90,9 +128,9 @@ public class BuildModeController
             string furnitureType = buildModeType;
 
             if ( 
-                WorldController.Instance.World.IsFurniturePlacementValid(furnitureType, tile) &&
-                WorldController.Instance.World.IsFurnitureWorkSpotClear(furnitureType, tile) && 
-                DoesBuildJobOverlapExistingBuildJob(tile, furnitureType) == false)
+                World.Current.FurnitureManager.IsPlacementValid(furnitureType, tile, CurrentPreviewRotation) &&
+                World.Current.FurnitureManager.IsWorkSpotClear(furnitureType, tile) && 
+                DoesFurnitureBuildJobOverlapExistingBuildJob(tile, furnitureType, CurrentPreviewRotation) == false)
             {
                 // This tile position is valid for this furniture
 
@@ -116,16 +154,19 @@ public class BuildModeController
                 else
                 {
                     Debug.ULogErrorChannel("BuildModeController", "There is no furniture job prototype for '" + furnitureType + "'");
-                    job = new Job(tile, furnitureType, World.Current.JobComplete_FurnitureBuilding, 0.1f, null, Job.JobPriority.High);
-                    job.JobDescription = "job_build_" + furnitureType + "_desc";
+                    job = new Job(tile, furnitureType, World.Current.FurnitureManager.ConstructJobCompleted, 0.1f, null, Job.JobPriority.High);
+                    job.adjacent = true;
+                    job.Description = "job_build_" + furnitureType + "_desc";
                 }
 
-                job.buildablePrototype = PrototypeManager.Furniture.Get(furnitureType);
+                Furniture furnituteToBuild = PrototypeManager.Furniture.Get(furnitureType).Clone();
+                furnituteToBuild.SetRotation(CurrentPreviewRotation);
+                job.buildablePrototype = furnituteToBuild;
 
                 // Add the job to the queue or build immediately if in Dev mode
                 if (Settings.GetSetting("DialogBoxSettings_developerModeToggle", false))
                 {
-                    WorldController.Instance.World.PlaceFurniture(job.JobObjectType, job.tile);
+                    World.Current.FurnitureManager.PlaceFurniture(furnituteToBuild, job.tile);
                 }
                 else
                 {
@@ -135,13 +176,27 @@ public class BuildModeController
                         {
                             // FIXME: I don't like having to manually and explicitly set
                             // flags that prevent conflicts. It's too easy to forget to set/clear them!
-                            Tile offsetTile = WorldController.Instance.World.GetTileAt(x_off, y_off, tile.Z);
-                            offsetTile.PendingBuildJob = job;
-                            job.OnJobStopped += (theJob) => offsetTile.PendingBuildJob = null;
+                            Tile offsetTile = World.Current.GetTileAt(x_off, y_off, tile.Z);
+                            HashSet<Job> pendingBuildJobs = WorldController.Instance.World.GetTileAt(x_off, y_off, tile.Z).PendingBuildJobs;
+                            if (pendingBuildJobs != null)
+                            {
+                                // if the existing buildJobs furniture is replaceable by the current furnitureType,
+                                // we can pretend it does not overlap with the new build
+
+                                // We should only have 1 furniture building job per tile, so this should return that job and only that job
+                                IEnumerable<Job> pendingFurnitureJob = pendingBuildJobs.Where(pendingJob => pendingJob.buildablePrototype.GetType() == typeof(Furniture));
+                                if (pendingFurnitureJob.Count() == 1)
+                                {
+                                    pendingFurnitureJob.Single().CancelJob();
+                                }
+                            }
+
+                            offsetTile.PendingBuildJobs.Add(job);
+                            job.OnJobStopped += (theJob) => offsetTile.PendingBuildJobs.Remove(job);
                         }
                     }
 
-                    WorldController.Instance.World.jobQueue.Enqueue(job);
+                    World.Current.jobQueue.Enqueue(job);
 
                     // Let our workspot tile know it is reserved for us
                     World.Current.ReserveTileAsWorkSpot((Furniture)job.buildablePrototype, job.tile);
@@ -157,8 +212,9 @@ public class BuildModeController
 
             // TODO: Reimplement this later: DoesBuildJobOverlapExistingBuildJob(t, furnitureType) == false)
             if ( 
-                WorldController.Instance.World.IsUtilityPlacementValid(utilityType, tile)  &&
-                DoesSameUtilityTypeAlreadyExist(tile, utilityType) == false)
+                World.Current.UtilityManager.IsPlacementValid(utilityType, tile)  &&
+                DoesSameUtilityTypeAlreadyExist(utilityType, tile) == false &&
+                DoesUtilityBuildJobOverlapExistingBuildJob(utilityType, tile) == false)
             {
                 // This tile position is valid for this furniture
 
@@ -176,8 +232,8 @@ public class BuildModeController
                 else
                 {
                     Debug.ULogErrorChannel("BuildModeController", "There is no furniture job prototype for '" + utilityType + "'");
-                    job = new Job(tile, utilityType, World.Current.JobComplete_UtilityBuilding, 0.1f, null, Job.JobPriority.High);
-                    job.JobDescription = "job_build_" + utilityType + "_desc";
+                    job = new Job(tile, utilityType, World.Current.UtilityManager.ConstructJobCompleted, 0.1f, null, Job.JobPriority.High);
+                    job.Description = "job_build_" + utilityType + "_desc";
                 }
 
                 job.buildablePrototype = PrototypeManager.Utility.Get(utilityType);
@@ -185,17 +241,17 @@ public class BuildModeController
                 // Add the job to the queue or build immediately if in dev mode
                 if (Settings.GetSetting("DialogBoxSettings_developerModeToggle", false))
                 {
-                    WorldController.Instance.World.PlaceUtility(job.JobObjectType, job.tile);
+                    World.Current.UtilityManager.PlaceUtility(job.Type, job.tile, true);
                 }
                 else
                 {
                     // FIXME: I don't like having to manually and explicitly set
                     // flags that preven conflicts. It's too easy to forget to set/clear them!
-                    Tile offsetTile = WorldController.Instance.World.GetTileAt(tile.X, tile.Y, tile.Z);
-                    offsetTile.PendingBuildJob = job;
-                    job.OnJobStopped += (theJob) => offsetTile.PendingBuildJob = null;
+                    Tile offsetTile = World.Current.GetTileAt(tile.X, tile.Y, tile.Z);
+                    offsetTile.PendingBuildJobs.Add(job);
+                    job.OnJobStopped += (theJob) => offsetTile.PendingBuildJobs.Remove(job);
 
-                    WorldController.Instance.World.jobQueue.Enqueue(job);
+                    World.Current.jobQueue.Enqueue(job);
                 }
             }
         }
@@ -206,30 +262,27 @@ public class BuildModeController
 
             TileType tileType = buildModeTile;
 
-            if ( 
-                tile.Type != tileType && 
+            if (
+                tile.Type != tileType &&
                 tile.Furniture == null &&
-                tile.PendingBuildJob == null &&
+                tile.PendingBuildJobs.Count == 0 &&
                 tileType.CanBuildHere(tile))
             {
                 // This tile position is valid tile type
 
                 // Create a job for it to be build
                 Job buildingJob = tileType.BuildingJob;
-                
+
                 buildingJob.tile = tile;
 
                 // Add the job to the queue or build immediately if in Dev mode
                 if (Settings.GetSetting("DialogBoxSettings_developerModeToggle", false))
                 {
-                    buildingJob.tile.Type = buildingJob.JobTileType;
+                    buildingJob.tile.SetTileType(buildingJob.JobTileType);
                 }
                 else
                 {
-                    // FIXME: I don't like having to manually and explicitly set
-                    // flags that prevent conflicts. It's too easy to forget to set/clear them!
-                    tile.PendingBuildJob = buildingJob;
-                    buildingJob.OnJobStopped += (theJob) => theJob.tile.PendingBuildJob = null;
+                    buildingJob.OnJobStopped += (theJob) => theJob.tile.PendingBuildJobs.Remove(theJob);
 
                     WorldController.Instance.World.jobQueue.Enqueue(buildingJob);
                 }
@@ -271,9 +324,13 @@ public class BuildModeController
 
                 tile.Furniture.SetDeconstructJob();
             }
-            else if (tile.PendingBuildJob != null)
+            else if (tile.PendingBuildJobs != null)
             {
-                tile.PendingBuildJob.CancelJob();
+                tile.PendingBuildJobs.Last().CancelJob();
+            }
+            else if (tile.Utilities.Count > 0)
+            {
+                tile.Utilities.Last().Value.SetDeconstructJob();
             }
         }
         else
@@ -282,20 +339,27 @@ public class BuildModeController
         }
     }
 
-    public bool DoesBuildJobOverlapExistingBuildJob(Tile t, string furnitureType)
+    public bool DoesFurnitureBuildJobOverlapExistingBuildJob(Tile t, string furnitureType, float rotation = 0)
     {
-        Furniture proto = PrototypeManager.Furniture.Get(furnitureType);
+        Furniture furnitureToBuild = PrototypeManager.Furniture.Get(furnitureType).Clone();
+        furnitureToBuild.SetRotation(rotation);
 
-        for (int x_off = t.X; x_off < (t.X + proto.Width); x_off++)
+        for (int x_off = t.X; x_off < (t.X + furnitureToBuild.Width); x_off++)
         {
-            for (int y_off = t.Y; y_off < (t.Y + proto.Height); y_off++)
+            for (int y_off = t.Y; y_off < (t.Y + furnitureToBuild.Height); y_off++)
             {
-                Job pendingBuildJob = WorldController.Instance.World.GetTileAt(x_off, y_off, t.Z).PendingBuildJob;
-                if (pendingBuildJob != null)
+                HashSet<Job> pendingBuildJobs = WorldController.Instance.World.GetTileAt(x_off, y_off, t.Z).PendingBuildJobs;
+                if (pendingBuildJobs != null)
                 {
                     // if the existing buildJobs furniture is replaceable by the current furnitureType,
                     // we can pretend it does not overlap with the new build
-                    return !proto.ReplaceableFurniture.Any(pendingBuildJob.buildablePrototype.HasTypeTag);
+
+                    // We should only have 1 furniture building job per tile, so this should return that job and only that job
+                    IEnumerable<Job> pendingFurnitureJob = pendingBuildJobs.Where(job => job.buildablePrototype.GetType() == typeof(Furniture));
+                    if (pendingFurnitureJob.Count() == 1)
+                    {
+                        return !furnitureToBuild.ReplaceableFurniture.Any(pendingFurnitureJob.Single().buildablePrototype.HasTypeTag);
+                    }
                 }
             }
         }
@@ -303,14 +367,48 @@ public class BuildModeController
         return false;
     }
 
-    public bool DoesSameUtilityTypeAlreadyExist(Tile tile, string furnitureType)
+    /// <summary>
+    /// Does the utility build job overlap an existing utility build job of the same type.
+    /// </summary>
+    /// <returns><c>true</c>, if utility build job overlaps an existing utility build job of the same type, <c>false</c> otherwise.</returns>
+    /// <param name="utilityType">Utility type to check for.</param>
+    /// <param name="tile">Tile to check for pending buildjobs.</param>
+    public bool DoesUtilityBuildJobOverlapExistingBuildJob(string utilityType, Tile tile)
     {
-        Utility proto = PrototypeManager.Utility.Get(furnitureType);
+        HashSet<Job> pendingBuildJobs = tile.PendingBuildJobs;
+        if (pendingBuildJobs != null)
+        {
+            IEnumerable<Job> pendingUtilityJob = pendingBuildJobs.Where(job => job.buildablePrototype.GetType() == typeof(Utility));
+            if (pendingUtilityJob.Count() > 0)
+            {
+                return pendingUtilityJob.Any(job => ((Utility)job.buildablePrototype).Type == utilityType);
+            }
+        }
+
+        return false;
+    }
+
+    public bool DoesSameUtilityTypeAlreadyExist(string type, Tile tile)
+    {
+        Utility proto = PrototypeManager.Utility.Get(type);
         return tile.Utilities.ContainsKey(proto.Name);
     }
 
-    // Use this for initialization
-    private void Start()
+    // Rotate the preview furniture to the left.
+    private void RotateFurnitireLeft()
     {
+        if (buildMode == BuildMode.FURNITURE && PrototypeManager.Furniture.Get(buildModeType).CanRotate)
+        {
+            CurrentPreviewRotation = (CurrentPreviewRotation + 90) % 360;
+        }
+    }
+
+    // Rotate the preview furniture to the right.
+    private void RotateFurnitireRight()
+    {
+        if (buildMode == BuildMode.FURNITURE && PrototypeManager.Furniture.Get(buildModeType).CanRotate)
+        {
+            CurrentPreviewRotation = (CurrentPreviewRotation - 90) % 360;
+        }
     }
 }

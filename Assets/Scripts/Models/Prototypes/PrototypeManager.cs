@@ -6,7 +6,8 @@
 // file LICENSE, which is part of this source code package, for details.
 // ====================================================
 #endregion
-using System.Collections.Generic;
+
+using ProjectPorcupine.Rooms;
 using Scheduler;
 
 /// <summary>
@@ -27,12 +28,17 @@ public class PrototypeManager
         Utility = new PrototypeMap<Utility>("Utilities", "Utility");
         UtilityConstructJob = new PrototypeMap<Job>();
         UtilityDeconstructJob = new PrototypeMap<Job>();
+        RoomBehavior = new PrototypeMap<RoomBehavior>("RoomBehaviors", "RoomBehavior");
         Need = new PrototypeMap<Need>("Needs", "Need");
         Trader = new PrototypeMap<TraderPrototype>("Traders", "Trader");
+        Currency = new PrototypeMap<Currency>("Currencies", "Currency");
         Quest = new PrototypeMap<Quest>("Quests", "Quest");
         Stat = new PrototypeMap<Stat>("Stats", "Stat");
-        SchedulerEvent = new PrototypeMap<ScheduledEvent>("Events", "Event");
+        GameEvent = new PrototypeMap<GameEvent>("GameEvents", "GameEvent");
+        ScheduledEvent = new PrototypeMap<ScheduledEvent>("ScheduledEvents", "ScheduledEvent");
         Headline = new PrototypeMap<Headline>("Headlines", "Headline");
+        Overlay = new PrototypeMap<OverlayDescriptor>("Overlays", "Overlay");
+        Ship = new PrototypeMap<Ship>("Ships", "Ship");
     }
 
     /// <summary>
@@ -75,6 +81,11 @@ public class PrototypeManager
     /// <value>The furniture deconstructjob prototype map.</value>
     public static PrototypeMap<Job> UtilityDeconstructJob { get; private set; }
 
+    /// Gets the roomBehavior prototype map.
+    /// </summary>
+    /// <value>The roomBehavior prototype map.</value>
+    public static PrototypeMap<RoomBehavior> RoomBehavior { get; private set; }
+
     /// <summary>
     /// Gets the inventory prototype map.
     /// </summary>
@@ -94,6 +105,12 @@ public class PrototypeManager
     public static PrototypeMap<TraderPrototype> Trader { get; private set; }
 
     /// <summary>
+    /// Gets the currency prototype map.
+    /// </summary>
+    /// <value>The currency prototype map.</value>
+    public static PrototypeMap<Currency> Currency { get; private set; }
+
+    /// <summary>
     /// Gets the quest prototype map.
     /// </summary>
     /// <value>The quest prototype map.</value>
@@ -106,14 +123,32 @@ public class PrototypeManager
     public static PrototypeMap<Stat> Stat { get; private set; }
 
     /// <summary>
-    /// Gets the scheduler event prototype map.
+    /// Gets the game event prototype map.
     /// </summary>
-    /// <value>The scheduler event prototype map.</value>
-    public static PrototypeMap<ScheduledEvent> SchedulerEvent { get; private set; }
+    /// <value>The game event prototype map.</value>
+    public static PrototypeMap<GameEvent> GameEvent { get; private set; }
+
+    /// <summary>
+    /// Gets the scheduled event prototype map.
+    /// </summary>
+    /// <value>The scheduled event prototype map.</value>
+    public static PrototypeMap<ScheduledEvent> ScheduledEvent { get; private set; }
 
     /// <summary>
     /// Gets the headline prototype map.
     /// </summary>
-    /// <value>The scheduler event prototype map.</value>
+    /// <value>The headline prototype map.</value>
     public static PrototypeMap<Headline> Headline { get; private set; }
+
+    /// <summary>
+    /// Gets the overlay prototype map.
+    /// </summary>
+    /// <value>The overlay prototype map.</value>
+    public static PrototypeMap<OverlayDescriptor> Overlay { get; private set; }
+
+    /// <summary>
+    /// Gets the ship prototype map.
+    /// </summary>
+    /// <value>The ship prototype map.</value>
+    public static PrototypeMap<Ship> Ship { get; private set; }
 }

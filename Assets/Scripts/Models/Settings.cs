@@ -8,35 +8,39 @@
 #endregion
 using System;
 using System.Collections.Generic;
-using System.Xml;
+using System.IO;
+using Newtonsoft.Json;
 using UnityEngine;
 
 public static class Settings
 {
-    // Settings.xml file that is created if none exists.
-    private const string FallbackSettingsXML = @"
-<Settings>
-  <worldWidth>101</worldWidth>
-  <worldHeight>101</worldHeight>
-  <localization>en_US</localization>
-  <DialogBoxSettings_fpsToggle>True</DialogBoxSettings_fpsToggle>
-  <DialogBoxSettings_fullScreenToggle>True</DialogBoxSettings_fullScreenToggle>
-  <DialogBoxSettings_qualityDropdown>2</DialogBoxSettings_qualityDropdown>
-  <DialogBoxSettings_vSyncDropdown>0</DialogBoxSettings_vSyncDropdown>
-  <DialogBoxSettings_resolutionDropdown>0</DialogBoxSettings_resolutionDropdown>
-  <DialogBoxSettings_musicVolume>1</DialogBoxSettings_musicVolume>
-  <ZoomLerp>10</ZoomLerp>
-  <ZoomSensitivity>3</ZoomSensitivity>
-</Settings>
+    // Settings.json file that is created if none exists.
+    private const string FallbackSettingJson = @"
+{
+	'worldWidth' : 101,
+	'worldHeight' : 101,
+	'localization' : 'en_US',
+	'DialogBoxSettings_performanceGroup' : 1,
+	'DialogBoxSettings_fullScreenToggle' : true,
+	'DialogBoxSettings_qualityDropdown' : 2,
+	'DialogBoxSettings_vSyncDropdown' : 0,
+	'DialogBoxSettings_resolutionDropdown' : 0,
+	'DialogBoxSettings_musicVolume' : 1,
+	'DialogBoxSettings_developerModeToggle' : false,
+	'ZoomLerp' : 10,
+	'ZoomSensitivity' : 3,
+	'AutosaveInterval' : 10,
+	'AutosaveFiles' : 5,
+}
 ";
 
     private static readonly string DefaultSettingsFilePath = System.IO.Path.Combine(
-        Application.streamingAssetsPath, System.IO.Path.Combine("Settings", "Settings.xml"));
+        Application.streamingAssetsPath, System.IO.Path.Combine("Settings", "Settings.json"));
 
     private static Dictionary<string, string> settingsDict;
 
     private static string userSettingsFilePath = System.IO.Path.Combine(
-        Application.persistentDataPath, "Settings.xml");
+        Application.persistentDataPath, "Settings.json");
 
     static Settings()
     {
@@ -58,7 +62,9 @@ public static class Settings
         }
 
         settingsDict.Add(key, defaultValue);
+
         SaveSettings();
+
         return defaultValue;
     }
 
@@ -89,8 +95,6 @@ public static class Settings
             settingsDict.Add(key, value);
             Debug.ULogChannel("Settings", "Created new setting : " + key + " to value of " + value);
         }
-
-        SaveSettings();
     }
 
     public static T GetSetting<T>(string key, T defaultValue)
@@ -117,36 +121,24 @@ public static class Settings
             }
         }
 
-        Debug.ULogWarningChannel("Settings", "Attempted to access a setting that was not loaded from Settings.xml:\t" + key);
+        Debug.ULogWarningChannel("Settings", "Attempted to access a setting that was not loaded from Settings.json:\t" + key);
         return defaultValue;
     }
 
-    private static void SaveSettings()
+    public static void SaveSettings()
     {
-        // Create an xml document.
-        XmlDocument doc = new XmlDocument();
+        Debug.ULogChannel("Settings", "Settings have changed, so there are settings to save!");
 
-        // Create main settings node.
-        XmlNode settingsNode = doc.CreateElement("Settings");
-
-        foreach (KeyValuePair<string, string> pair in settingsDict)
-        {
-            // Create a new element for each pair in the dict.
-            XmlElement settingElement = doc.CreateElement(pair.Key);
-            settingElement.InnerText = pair.Value;
-            Debug.ULogChannel("Settings", pair.Key + " : " + pair.Value);
-
-            // Add this element inside the Settings element.
-            settingsNode.AppendChild(settingElement);
-        }
-
-        // Apend Settings node to the document.
-        doc.AppendChild(settingsNode);
+        string jsonData = JsonConvert.SerializeObject(settingsDict, Newtonsoft.Json.Formatting.Indented);
+        Debug.ULogChannel("Settings", "Saving settings :: " + jsonData);
 
         // Save the document.
         try
         {
-            doc.Save(userSettingsFilePath);
+            using (StreamWriter writer = new StreamWriter(userSettingsFilePath))
+            {
+                writer.WriteLine(jsonData);
+            }
         }
         catch (Exception e)
         {
@@ -155,63 +147,41 @@ public static class Settings
         }
     }
 
-    private static void LoadSettings()
+    public static void LoadSettings()
     {
-        // Initialize the settings dict.
-        settingsDict = new Dictionary<string, string>();
-        string furnitureXmlText;
+        string settingsJsonText;
 
-        // Load the settings XML file.
+        // Load the settings Json file.
         // First try the user's private settings file in userSettingsFilePath.
         // If that doesn't work fall back to defaultSettingsFilePath.
-        // If that doesn't work fall back to the hard coded furnitureXmlText above.
+        // If that doesn't work fall back to the hard coded FallbackSettingJson above.
         if (System.IO.File.Exists(userSettingsFilePath) == false)
         {
             Debug.ULogChannel("Settings", "User settings file could not be found at '" + userSettingsFilePath + "'. Falling back to defaults.");
 
-            furnitureXmlText = DefaultSettingsXMLFallback();
+            settingsJsonText = DefaultSettingsJsonFallback();
         }
         else
         {
             try
             {
-                furnitureXmlText = System.IO.File.ReadAllText(userSettingsFilePath);
+                settingsJsonText = System.IO.File.ReadAllText(userSettingsFilePath);
             }
             catch (Exception e)
             {
                 Debug.ULogWarningChannel("Settings", "User settings file could not be found at '" + userSettingsFilePath + "'. Falling back to defaults.");
                 Debug.ULogWarningChannel("Settings", e.Message);
 
-                furnitureXmlText = DefaultSettingsXMLFallback();
+                settingsJsonText = DefaultSettingsJsonFallback();
             }
         }
 
-        // Create an xml document from the loaded string.
-        XmlDocument doc = new XmlDocument();
-        doc.LoadXml(furnitureXmlText);
-        Debug.ULogChannel("Settings", "Loaded settings");
-        Debug.ULogChannel("Settings", doc.InnerText);
-
-        // Get the Settings node. Its children are the individual settings.
-        XmlNode settingsNode = doc.GetElementsByTagName("Settings").Item(0);
-        XmlNodeList settingNodes = settingsNode.ChildNodes;
-        Debug.ULogChannel("Settings", settingNodes.Count + " settings loaded");
-
-        // Loop for each setting
-        foreach (XmlNode node in settingNodes)
-        {
-            if (node != null)
-            {
-                // and add setting to the settings dict.
-                settingsDict.Add(node.Name, node.InnerText);
-                Debug.ULogChannel("Settings", node.Name + " : " + node.InnerText);
-            }
-        }
+        settingsDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(settingsJsonText);
     }
 
-    private static string DefaultSettingsXMLFallback()
+    private static string DefaultSettingsJsonFallback()
     {
-        string furnitureXmlText = FallbackSettingsXML;
+        string settingsJson = FallbackSettingJson;
 
         if (System.IO.File.Exists(DefaultSettingsFilePath) == false)
         {
@@ -219,7 +189,7 @@ public static class Settings
 
             try
             {
-                System.IO.File.WriteAllText(DefaultSettingsFilePath, FallbackSettingsXML);
+                System.IO.File.WriteAllText(DefaultSettingsFilePath, FallbackSettingJson);
             }
             catch (Exception e)
             {
@@ -231,7 +201,7 @@ public static class Settings
         {
             try
             {
-                furnitureXmlText = System.IO.File.ReadAllText(DefaultSettingsFilePath);
+                settingsJson = System.IO.File.ReadAllText(DefaultSettingsFilePath);
             }
             catch (Exception e)
             {
@@ -240,6 +210,6 @@ public static class Settings
             }
         }
 
-        return furnitureXmlText;
+        return settingsJson;
     }
 }

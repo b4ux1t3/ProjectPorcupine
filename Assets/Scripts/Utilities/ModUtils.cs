@@ -7,8 +7,9 @@
 // ====================================================
 #endregion
 
-using System.Collections;
 using MoonSharp.Interpreter;
+using ProjectPorcupine.Buildable.Components;
+using ProjectPorcupine.PowerNetwork;
 using UnityEngine;
 
 [MoonSharpUserData]
@@ -79,5 +80,25 @@ public static class ModUtils
     public static float Clamp(float value, float min, float max)
     {
         return value.Clamp(min, max);
+    }
+
+    public static int Min(int a, int b)
+    {
+        return Mathf.Min(a, b);
+    }
+
+    public static int Max(int a, int b)
+    {
+        return Mathf.Max(a, b);
+    }
+
+    public static IPlugable GetPlugablePowerConnectionForTile(Tile tile)
+    {
+        if (tile != null && tile.Furniture != null)
+        {
+            return tile.Furniture.GetComponent<PowerConnection>("PowerConnection");
+        }
+
+        return null;
     }
 }

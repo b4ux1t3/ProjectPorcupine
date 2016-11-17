@@ -7,13 +7,11 @@
 // ====================================================
 #endregion
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Xml;
-using System.Xml.Schema;
-using System.Xml.Serialization;
 using MoonSharp.Interpreter;
+using Newtonsoft.Json.Linq;
+using ProjectPorcupine.Localization;
 using ProjectPorcupine.Rooms;
 using UnityEngine;
 
@@ -25,7 +23,8 @@ public enum Enterability
 }
 
 [MoonSharpUserData]
-public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
+[System.Diagnostics.DebuggerDisplay("Tile {X},{Y},{Z}")]
+public class Tile : ISelectable, IContextActionProvider, IComparable, IEquatable<Tile>
 {
     private TileType type = TileType.Empty;
 
@@ -43,6 +42,7 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
         MovementModifier = 1;
         Utilities = new Dictionary<string, Utility>();
         ReservedAsWorkSpotBy = new HashSet<Furniture>();
+        PendingBuildJobs = new HashSet<Job>();
     }
 
     // The function we callback any time our tile's data changes
@@ -54,19 +54,6 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
         get
         {
             return type;
-        }
-
-        set
-        {
-            if (type == value)
-            {
-                return;
-            }
-
-            type = value;
-            ForceTileUpdate = true;
-
-            OnTileClean();
         }
     }
 
@@ -97,8 +84,8 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
     {
         get
         {
-            // If Tile's BaseMovementCost or Furniture's MovementCost = 0 (i.e. impassable) we should always return 0 (stay impassable)
-            if (Type.BaseMovementCost == 0 || (Furniture != null && Furniture.MovementCost == 0))
+            // If Tile's BaseMovementCost, PathFindingWeight or Furniture's MovementCost, PathFindingWeight = 0 (i.e. impassable) we should always return 0 (stay impassable)
+            if (Type.BaseMovementCost.AreEqual(0) || Type.PathfindingWeight.AreEqual(0) || (Furniture != null && (Furniture.MovementCost.AreEqual(0) || Furniture.PathfindingWeight.AreEqual(0))))
             {
                 return 0f;
             }
@@ -117,7 +104,7 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
 
     // FIXME: This seems like a terrible way to flag if a job is pending
     // on a tile.  This is going to be prone to errors in set/clear.
-    public Job PendingBuildJob { get; set; }
+    public HashSet<Job> PendingBuildJobs { get; set; }
 
     public int X { get; private set; }
 
@@ -155,11 +142,35 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
     public static void ChangeTileTypeJobComplete(Job theJob)
     {
         // FIXME: For now this is hardcoded to build floor
-        theJob.tile.Type = theJob.JobTileType;
+        theJob.tile.SetTileType(theJob.JobTileType);
 
         // FIXME: I don't like having to manually and explicitly set
         // flags that preven conflicts. It's too easy to forget to set/clear them!
-        theJob.tile.PendingBuildJob = null;
+        theJob.tile.PendingBuildJobs.Remove(theJob);
+    }
+
+    public void SetTileType(TileType newTileType, bool doRoomFloodFill = true)
+    {
+        if (type == newTileType)
+        {
+            return;
+        }
+
+        type = newTileType;
+        ForceTileUpdate = true;
+
+        bool splitting = true;
+        if (newTileType == TileType.Empty)
+        {
+            splitting = false;
+        }
+
+        if (doRoomFloodFill)
+        {
+            World.Current.RoomManager.DoRoomFloodFill(this, splitting, true);
+        }
+
+        OnTileClean();
     }
 
     public bool UnplaceFurniture()
@@ -208,15 +219,16 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
         return true;
     }
 
-    public bool UnplaceUtility()
+    public bool UnplaceUtility(Utility utility)
     {
         // Just uninstalling.
         if (Utilities == null)
         {
+            Debug.ULogErrorChannel("Tile", "Utilities null when trying to unplace a Utility, this should never happen!");
             return false;
         }
 
-        Utilities = null;
+        Utilities.Remove(utility.Name);
 
         return true;
     }
@@ -225,7 +237,7 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
     {
         if (objInstance == null)
         {
-            return UnplaceUtility();
+            return false;
         }
 
         if (objInstance.IsValidPosition(this) == false)
@@ -341,9 +353,11 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
     /// </summary>
     /// <returns>The neighbours.</returns>
     /// <param name="diagOkay">Is diagonal movement okay?.</param>
-    public Tile[] GetNeighbours(bool diagOkay = false)
+    /// <param name="vertOkay">Is vertical movement okay?.</param>
+    /// <param name="nullOkay">Is returning null tiles okay?.</param>
+    public Tile[] GetNeighbours(bool diagOkay = false, bool vertOkay = false, bool nullOkay = false)
     {
-        Tile[] tiles = diagOkay == false ? new Tile[4] : new Tile[8];
+        Tile[] tiles = new Tile[10];
         tiles[0] = World.Current.GetTileAt(X, Y + 1, Z);
         tiles[1] = World.Current.GetTileAt(X + 1, Y, Z);
         tiles[2] = World.Current.GetTileAt(X, Y - 1, Z);
@@ -357,7 +371,46 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
             tiles[7] = World.Current.GetTileAt(X - 1, Y + 1, Z);
         }
 
-        return tiles.Where(tile => tile != null).ToArray();
+        // FIXME: This is a bit of a dirty hack, but it works for preventing characters from phasing through the floor for now.
+        if (vertOkay)
+        {
+            Tile[] vertTiles = GetVerticalNeighbors(true);
+            tiles[8] = vertTiles[0];
+            tiles[9] = vertTiles[1];
+        }
+
+        if (!nullOkay)
+        {
+            return tiles.Where(tile => tile != null).ToArray();
+        }
+        else
+        {
+            return tiles;
+        }
+    }
+
+    public Tile[] GetVerticalNeighbors(bool nullOkay = false)
+    {
+        Tile[] tiles = new Tile[2];
+        Tile tileup = World.Current.GetTileAt(X, Y, Z - 1);
+        if (tileup != null && tileup.Type == TileType.Empty)
+        {
+            tiles[0] = World.Current.GetTileAt(X, Y, Z - 1);
+        }
+
+        if (Type == TileType.Empty)
+        {
+            tiles[1] = World.Current.GetTileAt(X, Y, Z + 1);
+        }
+
+        if (!nullOkay)
+        {
+            return tiles.Where(tile => tile != null).ToArray();
+        }
+        else
+        {
+            return tiles;
+        }
     }
 
     /// <summary>
@@ -365,16 +418,64 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
     /// </summary>
     public bool HasNeighboursOfType(TileType tileType)
     {
-        return GetNeighbours(true).Any(tile => (tile != null && tile.Type == tileType));
+        return GetNeighbours(true, true).Any(tile => (tile != null && tile.Type == tileType));
     }
 
     /// <summary>
-    /// Returns true if any of the neighours is walkable.
+    /// Returns true if any of the neighours can reach this tile. Checks for clipping of diagonal paths.
     /// </summary>
     /// <param name="checkDiagonals">Will test diagonals as well if true.</param>
-    public bool HasWalkableNeighbours(bool checkDiagonals = false)
+    public bool IsReachableFromAnyNeighbor(bool checkDiagonals = false)
     {
-        return GetNeighbours(checkDiagonals).Any(tile => tile != null && tile.MovementCost > 0);
+        bool reachableFromSameLevel = GetNeighbours(checkDiagonals).Any(tile => tile != null && tile.MovementCost > 0 && (checkDiagonals == false || IsClippingCorner(tile) == false));
+        bool reachableVertically = GetVerticalNeighbors().Length > 0;
+        return reachableFromSameLevel || reachableVertically;
+    }
+
+    public bool IsClippingCorner(Tile neighborTile)
+    {
+        // If the movement from curr to neigh is diagonal (e.g. N-E)
+        // Then check to make sure we aren't clipping (e.g. N and E are both walkable)
+        int dX = this.X - neighborTile.X;
+        int dY = this.Y - neighborTile.Y;
+
+        if (Mathf.Abs(dX) + Mathf.Abs(dY) == 2)
+        {
+            // We are diagonal
+            if (World.Current.GetTileAt(X - dX, Y, Z).PathfindingCost.AreEqual(0f))
+            {
+                // East or West is unwalkable, therefore this would be a clipped movement.
+                return true;
+            }
+
+            if (World.Current.GetTileAt(X, Y - dY, Z).PathfindingCost.AreEqual(0f))
+            {
+                // North or South is unwalkable, therefore this would be a clipped movement.
+                return true;
+            }
+
+            // If we reach here, we are diagonal, but not clipping
+        }
+
+        // If we are here, we are either not clipping, or not diagonal
+        return false;
+    }
+
+    public bool HasClearLineToBottom()
+    {
+        if (type != TileType.Empty)
+        {
+            return false;
+        }
+
+        if (Down() == null)
+        {
+            return true;
+        }
+        else
+        {
+            return Down().HasClearLineToBottom();
+        }
     }
 
     public Tile North()
@@ -395,6 +496,35 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
     public Tile West()
     {
         return World.Current.GetTileAt(X - 1, Y, Z);
+    }
+
+    public Tile Up()
+    {
+        return World.Current.GetTileAt(X, Y, Z - 1);
+    }
+
+    public Tile Down()
+    {
+        return World.Current.GetTileAt(X, Y, Z + 1);
+    }
+
+    public Room GetNearestAdjacentRoom()
+    {
+        if (Room != null)
+        {
+            return this.Room;
+        }
+
+        // Using GetNeighbors we will prefer tiles linearally adjacent, then diagonal, and only then vertical
+        foreach (Tile neighbor in GetNeighbours(true, true))
+        {
+            if (neighbor.Room != null)
+            {
+                return neighbor.Room;
+            }
+        }
+
+        return null;
     }
 
     public Enterability IsEnterable()
@@ -427,36 +557,30 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
     }
     #endregion
 
-    #region Save XML
-    public XmlSchema GetSchema()
+    public object ToJson()
     {
-        return null;
+        return new JObject(
+            new JProperty("X", X),
+            new JProperty("Y", Y),
+            new JProperty("Z", Z),
+            new JProperty("TimesWalked", WalkCount),
+            new JProperty("RoomID", Room == null ? -1 : Room.ID),
+            new JProperty("Type", Type.Type));
     }
 
-    public void WriteXml(XmlWriter writer)
+    public void FromJson(JToken tileToken)
     {
-        writer.WriteAttributeString("X", X.ToString());
-        writer.WriteAttributeString("Y", Y.ToString());
-        writer.WriteAttributeString("Z", Z.ToString());
-        writer.WriteAttributeString("timesWalked", WalkCount.ToString());
-        writer.WriteAttributeString("RoomID", Room == null ? "-1" : Room.ID.ToString());
-        writer.WriteAttributeString("Type", Type.Type);
-    }
-
-    public void ReadXml(XmlReader reader)
-    {
-        // X and Y have already been read/processed
-        Room = World.Current.RoomManager[int.Parse(reader.GetAttribute("RoomID"))];
+        Room = World.Current.RoomManager[(int)tileToken["RoomID"]];
         if (Room != null)
         {
             Room.AssignTile(this);
         }
 
-        Type = PrototypeManager.TileType.Get(reader.GetAttribute("Type"));
-        WalkCount = int.Parse(reader.GetAttribute("timesWalked"));
+        // Since we are loading from a save here, we don't want to do a RoomFloodfill here.
+        SetTileType(PrototypeManager.TileType.Get((string)tileToken["Type"]), false);
+        WalkCount = (int)tileToken["TimesWalked"];
         ForceTileUpdate = true;
     }
-    #endregion
 
     #region ISelectableInterface implementation
 
@@ -485,32 +609,31 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
 
     public IEnumerable<ContextMenuAction> GetContextMenuActions(ContextMenu contextMenu)
     {
-        if (PendingBuildJob != null)
+        if (PendingBuildJobs != null)
         {
-            yield return new ContextMenuAction
-            {
-                Text = "Cancel Job",
-                RequireCharacterSelected = false,
-                Action = (cm, c) =>
-                {
-                    if (PendingBuildJob != null)
-                    {
-                        PendingBuildJob.CancelJob();
-                    }
-                }
-            };
-
-            if (!PendingBuildJob.IsBeingWorked)
+            foreach (Job pendingJob in PendingBuildJobs)
             {
                 yield return new ContextMenuAction
                 {
-                    Text = "Prioritize " + PendingBuildJob.GetName(),
-                    RequireCharacterSelected = true,
+                    Text = "Cancel " + pendingJob.GetName(),
+                    RequireCharacterSelected = false,
                     Action = (cm, c) =>
                     {
-                        c.PrioritizeJob(PendingBuildJob);
+                        pendingJob.CancelJob();
                     }
                 };
+                if (!pendingJob.IsBeingWorked)
+                {
+                    yield return new ContextMenuAction
+                    {
+                        Text = LocalizationTable.GetLocalization("prioritize", pendingJob.GetName()),
+                        RequireCharacterSelected = true,
+                        Action = (cm, c) =>
+                        {
+                            c.PrioritizeJob(pendingJob);
+                        }
+                    };
+                }
             }
         }
     }
@@ -518,6 +641,58 @@ public class Tile : IXmlSerializable, ISelectable, IContextActionProvider
     public bool IsReservedWorkSpot()
     {
         return ReservedAsWorkSpotBy.Count > 0;
+    }
+
+    #region IComparable
+
+    public int CompareTo(object other)
+    {
+        if (other == null)
+        {
+            return 1;
+        }
+
+        Tile otherTile = other as Tile;
+        if (otherTile != null)
+        {
+            int result = this.Z.CompareTo(otherTile.Z);
+            if (result != 0)
+            {
+                return result;
+            }
+
+            result = this.Y.CompareTo(otherTile.Y);
+            if (result != 0)
+            {
+                return result;
+            }
+
+            return this.X.CompareTo(otherTile.X);
+        }
+        else
+        {
+            throw new ArgumentException("Object is not a Tile");
+        }
+    }
+
+    #endregion
+
+    #region IEquatable<T>
+
+    public bool Equals(Tile otherTile)
+    {
+        if (otherTile == null)
+        {
+            return false;
+        }
+
+        return X == otherTile.X && Y == otherTile.Y && Z == otherTile.Z;
+    }
+    #endregion
+
+    public override string ToString()
+    {
+        return string.Format("[{0} {1}, {2}, {3}]", Type, X, Y, Z);
     }
 
     private void ReportTileChanged()

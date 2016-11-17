@@ -1,9 +1,7 @@
 # ProjectPorcupine [![Build Status](https://travis-ci.org/TeamPorcupine/ProjectPorcupine.svg?branch=master)](https://travis-ci.org/TeamPorcupine/ProjectPorcupine)
 Project Porcupine: A Base-Building Game...in Space!
 
-
-![Preview Thumbnail](http://i.imgur.com/t0l6PNk.png)
-
+![Preview Thumbnail](https://cloud.githubusercontent.com/assets/22880786/19826387/7ad0f0d2-9dd4-11e6-92f3-eb47b395ac63.png)
 
 [About](#about)  
 [Copyright & Licensing](#copyright--licensing)  
@@ -56,6 +54,8 @@ All non-code assets (e.g. art, sound) is licensed under CC BY-NC-SA 3.0
 The original tutorial project files, which feature no community-contributed code,
 are licensed under the MIT License and can be found here:
  * <http://quill18.com/porcupine/project_files/>
+ 
+Audio engine : FMOD by Firelight Technologies
 
 ## Contributing
 
@@ -63,7 +63,7 @@ Please check the [CONTRIBUTING.md](CONTRIBUTING.md) file for contribution instru
 
 For further information, such as Roadmaps, explanations of systems and features, Standards and Conventions, and all your Git needs and troubleshooting see the [Wiki](https://github.com/TeamPorcupine/ProjectPorcupine/wiki)
 
-Make sure that you are using [Unity 5.4] (https://unity3d.com/unity/beta).
+Make sure that you are using Unity 5.4.2 [Windows] (https://unity3d.com/get-unity/download?thank-you=update&download_nid=43049&os=Win) | [Mac] (https://unity3d.com/get-unity/download?thank-you=update&download_nid=43049&os=Mac)
 
 ## Vote on Proposed Features
 
